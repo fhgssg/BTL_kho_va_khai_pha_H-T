@@ -36,7 +36,7 @@ E:\ổ D\Kho\B\
 │
 ├── data/                       # Dữ liệu phục vụ hệ thống
 │   ├── raw/data.csv            # Dữ liệu giao dịch thô ban đầu
-│   ├── raw/exchange_rates_raw.json  # Snapshot phản hồi API tỷ giá
+│   ├── raw/ecommerce_products_raw.json # Snapshot phản hồi từ E-Commerce REST API
 │   └── processed/              # Dữ liệu sạch và dữ liệu bị loại kèm lý do
 │
 ├── database/                   # Kho dữ liệu & Tài liệu thiết kế
@@ -47,17 +47,20 @@ E:\ổ D\Kho\B\
 ├── scripts/                    # Toàn bộ mã nguồn Python thực thi các giai đoạn
 │   ├── 01_eda_and_cleaning.py  # Giai đoạn 1: EDA & Làm sạch dữ liệu
 │   ├── 03_etl_pipeline.py      # ETL SQLite dự phòng/local
-│   ├── 04_run_olap_queries.py  # Giai đoạn 4: Thực thi 8 truy vấn phân tích OLAP
+│   ├── 04_run_olap_queries.py  # Giai đoạn 4: Thực thi truy vấn phân tích OLAP
 │   ├── 05_data_mining.py       # Giai đoạn 5: RFM, K-Means & Market Basket
-│   ├── 03b_dwh_test_reconciliation.py # Kiểm thử và đối soát kho
-│   └── 06_lakehouse_minio_postgres_etl.py  # ETL chính: MinIO Lakehouse -> PostgreSQL
+│   ├── 03b_dwh_test_reconciliation.py # Kiểm thử và đối soát kho dữ liệu (28 Test Cases)
+│   ├── 06_lakehouse_minio_postgres_etl.py  # ETL chính: MinIO Lakehouse -> PostgreSQL
+│   └── 07_api_enrichment.py    # Tích hợp E-Commerce REST API (DummyJSON)
 │
 ├── sql/                        # Kịch bản SQL phân tích
 │   ├── 02_schema_ddl.sql       # DDL tạo Schema
 │   ├── 04_olap_queries.sql     # Các truy vấn OLAP & SQL nâng cao
 │   └── 05_olap_aggregate_cubes.sql # Các khối tổng hợp vật lý cho PostgreSQL
 │
-├── outputs/                    # Kết quả khai phá, dữ liệu tỷ giá và báo cáo audit/test
+├── outputs/                    # Kết quả khai phá, danh mục E-Commerce và báo cáo audit/test
+│   ├── ecommerce_product_catalog.csv # 194 sản phẩm trích xuất từ E-Commerce API
+│   ├── ecommerce_category_benchmarks.csv # 24 ngành hàng chuẩn hóa và điểm đánh giá
 │   ├── rfm_customer_segments.csv   # Kết quả phân khúc khách hàng RFM & K-Means
 │   └── market_basket_rules.csv     # 992 luật kết hợp gợi ý bán chéo (Apriori)
 │
@@ -89,7 +92,7 @@ E:\ổ D\Kho\B\
 
 ### ⚡ CÁCH 1: KHỞI CHẠY TỰ ĐỘNG BẰNG 1 CÂU LỆNH DUY NHẤT (KHUYẾN NGHỊ BÁO CÁO)
 
-Hệ thống được trang bị script điều phối master tự động hóa 100% các bước (Bật Docker -> API -> ETL MinIO -> Star Schema DWH -> Kiểm thử 25 Test Cases -> OLAP -> Data Mining -> Mở Web Dashboard):
+Hệ thống được trang bị script điều phối master tự động hóa 100% các bước (Bật Docker -> API -> ETL MinIO -> Star Schema DWH -> Kiểm thử 28 Test Cases -> OLAP -> Data Mining -> Mở Web Dashboard):
 
 - **Cách 1 (Windows CMD / Nhấp đúp chuột):**
   ```bat
@@ -117,17 +120,21 @@ Hệ thống được trang bị script điều phối master tự động hóa 
    ```bash
    docker compose up -d
    ```
-2. **Chạy ETL chính** — pipeline đưa dữ liệu gốc lên MinIO trước, sau đó đọc bản raw từ MinIO để làm sạch, tạo staging/curated và nạp vào PostgreSQL:
+2. **Trích xuất dữ liệu từ E-Commerce REST API** (làm giàu dữ liệu sản phẩm & chuẩn hóa ngành hàng):
+   ```bash
+   python scripts\07_api_enrichment.py
+   ```
+3. **Chạy ETL chính** — pipeline đưa dữ liệu gốc lên MinIO trước, sau đó đọc bản raw từ MinIO để làm sạch, tạo staging/curated và nạp vào PostgreSQL:
    ```bash
    python scripts\06_lakehouse_minio_postgres_etl.py
    ```
-3. **Kiểm thử DWH, sau đó chạy OLAP và khai phá**:
+4. **Kiểm thử DWH (28 Test Cases), sau đó chạy OLAP và khai phá**:
    ```bash
    python scripts\03b_dwh_test_reconciliation.py
    python scripts\04_run_olap_queries.py
    python scripts\05_data_mining.py
    ```
-4. **Mở Web Dashboard tương tác (Streamlit)**:
+5. **Mở Web Dashboard tương tác (Streamlit)**:
    ```bash
    python -m streamlit run app.py
    ```

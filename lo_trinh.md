@@ -3,13 +3,14 @@
 ---
 
 ## TỔNG QUAN KẾ HOẠCH
-- **Mục tiêu**: Hoàn thành toàn diện đồ án từ dữ liệu thô `data.csv` đến Kho dữ liệu hoàn chỉnh, phân tích nâng cao và Dashboard trực quan.
+- **Mục tiêu**: Hoàn thành toàn diện đồ án từ tập dữ liệu thô `data.csv` kết hợp dữ liệu làm giàu từ **DummyJSON E-Commerce REST API** đến Kho dữ liệu hoàn chỉnh, phân tích nâng cao và Dashboard trực quan.
 - **Thời lượng khuyến nghị**: 2 - 4 tuần (hoặc rút gọn trong 5 - 7 ngày tùy tiến độ bài tập).
 - **Công nghệ sử dụng**:
   - Ngôn ngữ: `Python 3.11` (Pandas, Numpy, Scikit-learn, Mlxtend, SqlAlchemy).
+  - Tích hợp dữ liệu ngoài: **DummyJSON E-Commerce REST API** (194 sản phẩm, 24 ngành hàng).
   - Lakehouse chính: `MinIO` (S3) với các lớp raw/staging/curated, dữ liệu Parquet được xử lý bằng `DuckDB`.
-  - Kho phục vụ phân tích: `PostgreSQL`; `SQLite` giữ làm phương án local/dự phòng.
-  - Trực quan hóa: `Streamlit` (Dashboard web tương tác trực tiếp bằng Python) hoặc `Power BI`.
+  - Kho phục vụ phân tích: `PostgreSQL` DWH chuẩn Star Schema (có sẵn 3 Materialized Views Cubes); `SQLite` giữ làm phương án local/dự phòng.
+  - Trực quan hóa: `Streamlit` (Dashboard web 5 tabs nghiệp vụ tương tác trực tiếp bằng Python, kết hợp Plotly).
 
 ---
 
@@ -113,13 +114,12 @@
 
 - [x] **Bước 6.1**: Xây dựng Dashboard tương tác:
   - Sử dụng **Streamlit** kết hợp Plotly (`app.py`), lấy dữ liệu từ PostgreSQL DWH và các tệp kết quả khai phá `outputs/`.
-- [x] **Bước 6.2**: Thiết kế các trang hiển thị chính:
-  - Tab 1: Tổng quan kinh doanh & Chỉ số tài chính (KPIs, xu hướng MoM, khung giờ vàng).
-  - Tab 2: Phân tích địa lý & Top sản phẩm sinh lời.
-  - Tab 3: Khám phá phân khúc khách hàng RFM & gom cụm K-Means.
-  - Tab 4: Công cụ gợi ý sản phẩm bán kèm tương tác (Cross-sell Recommender).
-  - Tab 5: Kiến trúc Kho dữ liệu Star Schema & DDL.
-  - Tab 6: Phân tích Đa tiền tệ & Tỷ giá hối đoái (Frankfurter API / ECB Live Rates).
+- [x] **Bước 6.2**: Thiết kế các trang hiển thị chính (5 Tabs chuẩn):
+  - Tab 1: Báo Cáo Hiệu Năng Doanh Thu (KPIs, xu hướng theo tháng, tốc độ tăng trưởng MoM, khung giờ vàng mua sắm).
+  - Tab 2: Phân Tích Đa Chiều OLAP Studio (Tương tác trực tiếp 5 thao tác OLAP: Roll-up, Drill-down, Slice, Dice, Pivot).
+  - Tab 3: Thị Trường & Ngành Hàng Sản Phẩm (Địa lý UK vs Quốc tế, Doanh thu phân bổ theo ngành hàng chuẩn hóa kết hợp E-Commerce API, Top 10 sản phẩm).
+  - Tab 4: Phân Khúc Khách Hàng RFM & Gom Cụm K-Means (8 phân khúc khách hàng & mô hình học máy không giám sát).
+  - Tab 5: Gợi Ý Bán Chéo Giỏ Hàng Cross-Sell (Công cụ tra cứu sản phẩm mua kèm thông minh từ 992 luật kết hợp Apriori).
 - [x] **Bước 6.3**: Viết báo cáo tổng kết đồ án chi tiết (`BAO_CAO_DO_AN.md`).
 
 *Thời gian dự kiến*: 2 - 3 ngày | *Đầu ra*: Ứng dụng Dashboard `app.py` & Báo cáo đồ án `BAO_CAO_DO_AN.md`.
@@ -133,7 +133,7 @@
 | **Giai đoạn 1** | EDA & Tiền xử lý dữ liệu | `scripts/01_eda_and_cleaning.py` | ✅ Hoàn thành |
 | **Giai đoạn 2** | Thiết kế Star Schema & DDL | `database/02_schema_ddl.sql`, `02_data_modeling.md` | ✅ Hoàn thành |
 | **Giai đoạn 3** | Lakehouse ETL: MinIO → PostgreSQL | `scripts/06_lakehouse_minio_postgres_etl.py`, `raw/staging/curated`, PostgreSQL DWH | ✅ Hoàn thành |
-| **Giai đoạn 4** | Truy vấn OLAP & Phân tích SQL | `sql/04_olap_queries.sql`, `scripts/04_run_olap_queries.py` | ✅ Hoàn thành |
-| **Giai đoạn 5** | RFM Segmentation & Market Basket | `scripts/05_data_mining.py`, `outputs/` | ✅ Hoàn thành |
-| **Giai đoạn 6** | Dashboard Web & Báo cáo hoàn chỉnh | `app.py` (6 tabs), `BAO_CAO_DO_AN.md` | ✅ Hoàn thành (100%) |
-| **Tích hợp dữ liệu bổ sung** | **API Enrichment – Frankfurter (ECB)** | `scripts/07_api_enrichment.py`, `outputs/exchange_rates.csv`, `curated/dim_currency.parquet`, PostgreSQL `dim_currency` | ✅ **Đầy đủ (EDA + ETL + OLAP + Dashboard)** |
+| **Giai đoạn 4** | Truy vấn OLAP & Phân tích SQL | `sql/04_olap_queries.sql`, `scripts/04_run_olap_queries.py`, `sql/05_olap_aggregate_cubes.sql` | ✅ Hoàn thành |
+| **Giai đoạn 5** | RFM Segmentation & Market Basket | `scripts/05_data_mining.py`, `outputs/rfm_customer_segments.csv`, `outputs/market_basket_rules.csv` | ✅ Hoàn thành |
+| **Giai đoạn 6** | Dashboard Web & Báo cáo hoàn chỉnh | `app.py` (5 tabs chuẩn), `BAO_CAO_DO_AN.md` | ✅ Hoàn thành (100%) |
+| **Tích hợp dữ liệu bổ sung** | **E-Commerce REST API Enrichment (DummyJSON)** | `scripts/07_api_enrichment.py`, `outputs/ecommerce_product_catalog.csv`, `outputs/ecommerce_category_benchmarks.csv` | ✅ **Đầy đủ (Extract + Enrich + Lakehouse + DWH + Dashboard)** |

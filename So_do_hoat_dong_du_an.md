@@ -21,9 +21,9 @@ flowchart TD
 
     subgraph LOCAL["Máy chạy dự án"]
         SOURCE["Chuẩn bị data/raw/data.csv"]
-        FXQ{"Có cập nhật dữ liệu tỷ giá?"}
-        FX["Chạy scripts/07_api_enrichment.py<br/>Lưu snapshot JSON và exchange_rates.csv"]
-        SKIPFX["Bỏ qua enrichment tỷ giá"]
+        FXQ{"Có cập nhật API thương mại điện tử?"}
+        FX["Chạy scripts/07_api_enrichment.py<br/>Lưu snapshot JSON và catalog e-commerce"]
+        SKIPFX["Bỏ qua enrichment API"]
         DOCKER["Khởi động MinIO và PostgreSQL<br/>docker compose up -d"]
         ETL["Chạy scripts/06_lakehouse_minio_postgres_etl.py"]
         RAWCHECK{"Có file CSV nguồn?"}

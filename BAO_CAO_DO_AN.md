@@ -50,15 +50,15 @@ Bảng thông số kỹ thuật của tập dữ liệu giao dịch thô ban đ�
 
 ### 1.4. Quy chuẩn xử lý API Ingestion & Nguyên tắc truy xuất nguồn gốc (Data Lineage)
 Trong thiết kế Kho Dữ Liệu hiện đại, việc gọi API ngoài không nên nạp thẳng một chiều vào Fact/Dim mà phải tuân thủ chuẩn **Auditable Data Lineage**:
-1. **Lưu trữ bản trích xuất thô (Raw Snapshot)**: Toàn bộ phản hồi API dạng JSON được snapshot lưu trữ tại `data/raw/exchange_rates_raw.json` kèm các siêu dữ liệu (metadata):
+1. **Lưu trữ bản trích xuất thô (Raw Snapshot)**: Toàn bộ phản hồi API dạng JSON được snapshot lưu trữ tại `data/raw/ecommerce_products_raw.json` kèm các siêu dữ liệu (metadata):
    - `extracted_at`: Thời điểm gửi request (ISO 8601 UTC).
-   - `endpoint` & `params`: URL và tham số gọi API (`from=GBP&to=USD,EUR`).
-   - `status` & `record_count`: Trạng thái phản hồi HTTP và số lượng bản ghi nhận được.
+   - `endpoint` & `params`: URL và tham số gọi API (`https://dummyjson.com/products?limit=194`).
+   - `status` & `record_count`: Trạng thái phản hồi HTTP và số lượng bản ghi nhận được (194 sản phẩm).
 2. **Minh bạch hóa dữ liệu dự phòng (Fallback Provenance)**:
-   - Nếu kết nối internet hoặc API gặp sự cố, hệ thống chuyển sang chế độ dự phòng (Offline Fallback Benchmark).
-   - Để tránh nhầm lẫn giữa dữ liệu ECB thực tế và tỷ giá ước lượng, trường `Is_Fallback` (0: Real Live ECB, 1: Fallback) và `API_Source` được lưu tường minh vào bảng `Dim_Currency` trong DWH.
+   - Nếu kết nối internet hoặc API gặp sự cố, hệ thống tự động chuyển sang chế độ dự phòng ngoại tuyến (Offline Fallback Cache) với 194 sản phẩm chuẩn và 24 ngành hàng chuẩn hóa.
+   - Để kiểm soát chất lượng, cờ `Is_Fallback` (0: Live API Call, 1: Fallback Cache) và `API_Source` được lưu trữ minh bạch trong metadata và catalog.
 3. **Quy trình luân chuyển dữ liệu**:
-   $$\text{Frankfurter API (ECB)} \longrightarrow \text{Raw Snapshot (JSON)} \longrightarrow \text{EDA \& Transform} \longrightarrow \text{Dim\_Currency (DWH)} \longrightarrow \text{OLAP Multi-Currency}$$
+   $$\text{DummyJSON REST API} \longrightarrow \text{Raw Snapshot (JSON)} \longrightarrow \text{MinIO Lakehouse (Raw } \to \text{ Staging } \to \text{ Curated)} \longrightarrow \text{Data Enrichment (Common Key: Category\_VN)} \longrightarrow \text{BI Dashboard}$$
 
 ### 1.5. Sơ đồ kiến trúc luồng dữ liệu tổng thể (End-to-End Data Lineage Architecture)
 Hệ thống kết nối luồng dữ liệu đa nguồn từ trích xuất đến trình diễn theo sơ đồ dưới đây:
@@ -67,24 +67,24 @@ Hệ thống kết nối luồng dữ liệu đa nguồn từ trích xuất đ�
 flowchart TD
     subgraph SOURCELAYER ["1. DATA SOURCES LAYER (TẦNG NGUỒN DỮ LIỆU)"]
         S1["Tập dữ liệu Online Retail<br/>(UCI: data.csv ~541K dòng)"]
-        S2["Tỷ giá hối đoái ECB Live<br/>(Frankfurter API: GBP->USD/EUR)"]
+        S2["E-Commerce REST API<br/>(DummyJSON: 194 sản phẩm, 24 ngành hàng)"]
     end
 
     subgraph RAWLAYER ["2. RAW STORAGE & INGESTION (TẦNG LƯU TRỮ THÔ)"]
         R1["data/raw/data.csv"]
-        R2["data/raw/exchange_rates_raw.json<br/>(Snapshot kèm Metadata & Is_Fallback)"]
+        R2["data/raw/ecommerce_products_raw.json<br/>(Snapshot kèm Metadata & Is_Fallback)"]
     end
 
     subgraph STAGING ["3. STAGING & DATA PROCESSING (LÀM SẠCH & TIỀN XỬ LÝ)"]
         CL["scripts/01_eda_and_cleaning.py<br/>• Loại hóa đơn hủy 'C'<br/>• Lọc Quantity/Price <= 0<br/>• Chuẩn hóa Description<br/>• Gán IsGuestCustomer (-1)"]
         CLEAN_CSV["data/processed/data_cleaned.csv<br/>(524,874 dòng sạch)"]
-        CR["scripts/07_api_enrichment.py<br/>(Chuẩn hóa tỷ giá cuối tháng)"]
+        CR["scripts/07_api_enrichment.py<br/>(Chuẩn hóa 24 ngành hàng, tính Rating & Benchmark)"]
     end
 
     subgraph LAKEHOUSE ["4. LAKEHOUSE LAYER (MINIO RAW → STAGING → CURATED)"]
-        LAKE_RAW["raw/online_retail/data.csv"]
-        LAKE_STAGING["staging/online_retail/data_cleaned.parquet"]
-        LAKE_CURATED["curated/online_retail/*.parquet<br/>(Star Schema + Currency)"]
+        LAKE_RAW["raw/online_retail/data.csv<br/>raw/online_retail/ecommerce_products_raw.json"]
+        LAKE_STAGING["staging/online_retail/data_cleaned.parquet<br/>staging/online_retail/ecommerce_product_catalog.parquet"]
+        LAKE_CURATED["curated/online_retail/*.parquet<br/>(Star Schema Parquet + E-Commerce Catalog)"]
         LAKE_RAW --> LAKE_STAGING --> LAKE_CURATED
     end
     subgraph DWHLAYER ["5. DATA WAREHOUSE LAYER (KHO DỮ LIỆU STAR SCHEMA)"]
@@ -94,19 +94,18 @@ flowchart TD
             DC["Dim_Customer (4,339 khách)"]
             DP["Dim_Product (3,921 SKU)"]
             DL["Dim_Location (38 quốc gia)"]
-            DCUR["Dim_Currency (13 tháng)"]
             FS["Fact_Sales (524,874 dòng)"]
         end
     end
 
     subgraph ANALYTICS ["6. ANALYTICS & DATA MINING (PHÂN TÍCH & KHAI PHÁ)"]
-        OLAP["scripts/04_run_olap_queries.py<br/>• Doanh thu Thời gian / MoM<br/>• Cơ cấu thị trường UK/Global<br/>• Top sản phẩm & Repeat Rate<br/>• Quy đổi đa tiền tệ"]
-        MINING["scripts/05_data_mining.py<br/>• RFM Scoring (8 phân khúc)<br/>• K-Means Clustering (k=2)<br/>• Apriori MBA (992 luật bán kèm)"]
-        OUT["outputs/<br/>• rfm_customer_segments.csv<br/>• market_basket_rules.csv<br/>• exchange_rates.csv"]
+        OLAP["scripts/04_run_olap_queries.py<br/>• Doanh thu Thời gian / MoM<br/>• Cơ cấu thị trường UK/Global<br/>• Top sản phẩm & Repeat Rate<br/>• 3 Materialized Views Cubes"]
+        MINING["scripts/05_data_mining.py<br/>• RFM Scoring (8 phân khúc thuần Việt)<br/>• K-Means Clustering (k=2)<br/>• Apriori MBA (992 luật bán kèm)"]
+        OUT["outputs/<br/>• rfm_customer_segments.csv<br/>• market_basket_rules.csv<br/>• ecommerce_product_catalog.csv<br/>• ecommerce_category_benchmarks.csv"]
     end
 
     subgraph PRESENTATION ["7. PRESENTATION & BI DASHBOARD (TRỰC QUAN HÓA)"]
-        ST["Streamlit BI Dashboard (app.py)<br/>• Tab 1: Xu Hướng & MoM<br/>• Tab 2: Địa Lý & Top SKU<br/>• Tab 3: Khách Hàng RFM & K-Means<br/>• Tab 4: Gợi Ý Bán Chéo (Recommender)<br/>• Tab 5: Kiến Trúc Star Schema<br/>• Tab 6: Quy Đổi Tỷ Giá Đa Tiền Tệ"]
+        ST["Streamlit BI Dashboard (app.py)<br/>• Tab 1: Hiệu Năng Doanh Thu & MoM<br/>• Tab 2: OLAP Studio (Roll-up, Drill-down, Slice, Dice, Pivot)<br/>• Tab 3: Thị Trường & Ngành Hàng (Enrichment API)<br/>• Tab 4: Phân Khúc Khách Hàng (RFM & K-Means)<br/>• Tab 5: Gợi Ý Bán Chéo (Cross-Sell)"]
         SUP["Apache Superset (Docker BI)"]
     end
 
@@ -116,11 +115,12 @@ flowchart TD
     R2 --> CR
     CLEAN_CSV --> LAKE_RAW
     LAKE_CURATED --> ETL
-    CR --> ETL
-    ETL --> DD & DC & DP & DL & DCUR & FS
+    CR --> LAKE_RAW
+    ETL --> DD & DC & DP & DL & FS
     FS --> OLAP
     FS --> MINING
     MINING --> OUT
+    CR --> OUT
     DWH --> ST
     OUT --> ST
     DWH --> SUP
@@ -243,14 +243,13 @@ Script thực hiện: `scripts/05_data_mining.py`.
 
 Ứng dụng web: `app.py` (Chạy bằng lệnh: `streamlit run app.py`).
 
-### Các tính năng chính trên Dashboard:
-1. **Executive KPI Cards**: Hiển thị doanh thu tổng (**£10.64M**), tổng đơn, Giá trị đơn hàng trung bình (**£533.17**) và số khách định danh (**4,338**).
-2. **Tab 1 - Xu hướng Doanh thu**: Biểu đồ kết hợp Bar-Line thể hiện doanh thu, số đơn và tỷ lệ tăng trưởng MoM theo tháng, phân tích khung giờ cao điểm.
-3. **Tab 2 - Thị Trường & Sản Phẩm**: Biểu đồ phân bổ tỷ trọng doanh thu Vương quốc Anh vs Quốc tế, Top 10 sản phẩm bán chạy nhất về số lượng và doanh thu bằng tên tiếng Việt.
-4. **Tab 3 - Phân Khúc Khách Hàng**: Biểu đồ Treemap doanh thu theo phân khúc RFM, biểu đồ phân tán K-Means và danh sách Top Khách hàng VIP.
-5. **Tab 4 - Gợi Ý Bán Chéo Giỏ Hàng**: Công cụ chọn 1 sản phẩm -> tự động gợi ý các sản phẩm đi kèm theo điểm Lift và Độ tin cậy (Confidence).
-6. **Tab 5 - Kiến Trúc Kho Dữ Liệu**: Sơ đồ Star Schema và bảng thống kê thực tế các bảng DWH.
-7. **Tab 6 - Tích Hợp API Thương Mại Điện Tử**: Kết nối thời gian thực tới DummyJSON E-Commerce REST API, hiển thị chỉ số ngành hàng, đánh giá người dùng (Rating ★) và tra cứu sản phẩm trực tiếp.
+### Các tính năng chính trên Dashboard (5 Tab nghiệp vụ chuyên sâu):
+1. **Executive KPI Cards**: Hiển thị doanh thu tổng (**£10.64M**), tổng đơn hàng sạch, Giá trị đơn hàng trung bình AOV (**£533.17**) và số khách hàng định danh (**4,338**).
+2. **Tab 1 - Báo Cáo Hiệu Năng Doanh Thu**: Biểu đồ kết hợp Bar-Line thể hiện doanh thu, số đơn và tỷ lệ tăng trưởng MoM theo tháng, phân tích doanh thu theo các thứ trong tuần và khung giờ vàng mua sắm (Peak Hours).
+3. **Tab 2 - Phân Tích Đa Chiều OLAP Studio**: Trình diễn tương tác 5 thao tác OLAP cốt lõi: Roll-up (Tháng lên Quý/Năm), Drill-down (Năm xuống Quý/Tháng), Slice (Cắt lát theo năm/quốc gia), Dice (Xúc xắc đa chiều theo Quý và Nhóm quốc gia), và Pivot (Xoay trục ma trận Quốc gia × Quý).
+4. **Tab 3 - Thị Trường & Ngành Hàng Sản Phẩm**: Phân bổ doanh thu địa lý (Vương quốc Anh vs Quốc tế); tích hợp làm giàu dữ liệu từ DummyJSON E-Commerce REST API theo mã ngành hàng chung (`Category_VN`) để phân tích cơ cấu ngành hàng và đối sánh Benchmark sản phẩm; Top 10 sản phẩm bán chạy nhất về số lượng và doanh thu bằng tên thuần tiếng Việt.
+5. **Tab 4 - Phân Khúc Khách Hàng (RFM & K-Means)**: Biểu đồ Treemap doanh thu theo 8 phân khúc RFM thuần tiếng Việt (Khách hàng VIP, Khách hàng trung thành, v.v.), biểu đồ phân tán K-Means và danh sách Top Khách hàng VIP đóng góp 54.4% doanh thu.
+6. **Tab 5 - Gợi Ý Bán Chéo Giỏ Hàng (Cross-Sell)**: Công cụ Recommender Engine tương tác: nhân viên chọn 1 sản phẩm bán lẻ -> hệ thống tự động gợi ý các sản phẩm đi kèm có xác suất mua cùng cao nhất dựa trên 992 luật kết hợp Apriori (với điểm Lift, Support và Confidence).
 
 ---
 

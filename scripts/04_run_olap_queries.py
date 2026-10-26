@@ -202,26 +202,71 @@ def run_olap_analysis(database_url=None):
     print(df_q6.to_string(index=False))
 
     # -------------------------------------------------------------------------
-   
-
+    # BÀI TOÁN 7: TOP 10 KHÁCH HÀNG VIP ĐÓNG GÓP DOANH THU CAO NHẤT (DENSE_RANK)
     # -------------------------------------------------------------------------
-    # BÀI TOÁN 9: BIẾN ĐỘNG TỶ GIÁ THÁNG QUA THÁNG (MOM FX DELTA)
-    # -------------------------------------------------------------------------
-    print("\n\n[BÀI TOÁN 9] BIẾN ĐỘNG TỶ GIÁ THEO THÁNG (WINDOW FUNCTION LAG)")
+    print("\n\n[BÀI TOÁN 7] TOP 10 KHÁCH HÀNG VIP ĐÓNG GÓP DOANH THU CAO NHẤT")
     print("-" * 80)
-    q9 = """
-    SELECT
-        YearMonth,
-        USD_Rate,
-        ROUND(USD_Rate - LAG(USD_Rate) OVER (ORDER BY Year, Month), 4) AS USD_MoM_Delta,
-        EUR_Rate,
-        ROUND(EUR_Rate - LAG(EUR_Rate) OVER (ORDER BY Year, Month), 4) AS EUR_MoM_Delta
-    FROM Dim_Currency
-    ORDER BY Year, Month;
+    q7 = """
+    SELECT 
+        c.CustomerID,
+        c.CustomerCode,
+        c.Country,
+        COUNT(DISTINCT f.InvoiceNo) AS TotalOrders,
+        SUM(f.Quantity) AS TotalUnitsBought,
+        ROUND(SUM(f.TotalRevenue), 2) AS TotalSpent,
+        ROUND(SUM(f.TotalRevenue) / COUNT(DISTINCT f.InvoiceNo), 2) AS AvgOrderValue,
+        DENSE_RANK() OVER (ORDER BY SUM(f.TotalRevenue) DESC) AS SpendingRank
+    FROM Fact_Sales f
+    JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
+    WHERE c.IsGuestCustomer = 0
+    GROUP BY c.CustomerID, c.CustomerCode, c.Country
+    ORDER BY TotalSpent DESC
+    LIMIT 10;
     """
     with engine.connect() as conn:
-        df_q9 = pd.read_sql_query(text(q9), conn)
-    print(df_q9.to_string(index=False))
+        df_q7 = pd.read_sql_query(text(q7), conn)
+    print(df_q7.to_string(index=False))
+
+    # -------------------------------------------------------------------------
+    # BÀI TOÁN 8: BÁO CÁO TỔNG HỢP DOANH THU ĐA CẤP (MÔ PHỎNG ROLLUP NĂM -> QUÝ -> THÁNG)
+    # -------------------------------------------------------------------------
+    print("\n\n[BÀI TOÁN 8] BÁO CÁO TỔNG HỢP DOANH THU ĐA CẤP (MÔ PHỎNG ROLLUP)")
+    print("-" * 80)
+    q8 = """
+    SELECT 
+        CAST(d.Year AS TEXT) AS ReportYear,
+        d.QuarterName AS ReportQuarter,
+        d.MonthName AS ReportMonth,
+        ROUND(SUM(f.TotalRevenue), 2) AS Revenue,
+        'Month Level' AS AggregationLevel
+    FROM Fact_Sales f
+    JOIN Dim_Date d ON f.DateKey = d.DateKey
+    GROUP BY d.Year, d.QuarterName, d.Month, d.MonthName
+    UNION ALL
+    SELECT 
+        CAST(d.Year AS TEXT) AS ReportYear,
+        d.QuarterName AS ReportQuarter,
+        '--- TOTAL QUARTER ---' AS ReportMonth,
+        ROUND(SUM(f.TotalRevenue), 2) AS Revenue,
+        'Quarter Subtotal' AS AggregationLevel
+    FROM Fact_Sales f
+    JOIN Dim_Date d ON f.DateKey = d.DateKey
+    GROUP BY d.Year, d.QuarterName
+    UNION ALL
+    SELECT 
+        CAST(d.Year AS TEXT) AS ReportYear,
+        '--- TOTAL YEAR ---' AS ReportQuarter,
+        '--- TOTAL YEAR ---' AS ReportMonth,
+        ROUND(SUM(f.TotalRevenue), 2) AS Revenue,
+        'Year Total' AS AggregationLevel
+    FROM Fact_Sales f
+    JOIN Dim_Date d ON f.DateKey = d.DateKey
+    GROUP BY d.Year
+    ORDER BY ReportYear, ReportQuarter, ReportMonth;
+    """
+    with engine.connect() as conn:
+        df_q8 = pd.read_sql_query(text(q8), conn)
+    print(df_q8.head(15).to_string(index=False))
 
     olap_demos = [
         (
