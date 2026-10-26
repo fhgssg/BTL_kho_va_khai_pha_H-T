@@ -195,30 +195,29 @@ def run_lakehouse_pipeline():
     fact_sales['UnitPrice'] = df_clean['UnitPrice'].round(2)
     fact_sales['TotalRevenue'] = (fact_sales['Quantity'] * fact_sales['UnitPrice']).round(2)
 
-    currency_csv = os.path.join(BASE_DIR, "outputs", "exchange_rates.csv")
-    currency_columns = [
-        "CurrencyKey", "Year", "Month", "YearMonth", "RateDate",
-        "GBP_Base", "USD_Rate", "EUR_Rate", "API_Source", "Is_Fallback", "Extracted_At"
-    ]
-    if os.path.exists(currency_csv):
-        df_currency = pd.read_csv(currency_csv)
-        df_currency.columns = df_currency.columns.str.lower()
-        raw_currency = os.path.join(BASE_DIR, "data", "raw", "exchange_rates_raw.json")
-        if os.path.exists(raw_currency):
-            fs.put(raw_currency, "raw/online_retail/exchange_rates_raw.json")
-        with fs.open("staging/online_retail/exchange_rates.parquet", "wb") as f:
-            df_currency.to_parquet(f, index=False, engine="pyarrow", compression="snappy")
-    else:
-        df_currency = pd.DataFrame(columns=[column.lower() for column in currency_columns])
+    # Upload E-Commerce API Raw Snapshot lên MinIO Lakehouse
+    raw_ecommerce = os.path.join(BASE_DIR, "data", "raw", "ecommerce_products_raw.json")
+    if os.path.exists(raw_ecommerce):
+        fs.put(raw_ecommerce, "raw/online_retail/ecommerce_products_raw.json")
+        print("     ✅ MinIO raw: 'raw/online_retail/ecommerce_products_raw.json'")
 
-    # Đẩy các bảng Curated Parquet lên MinIO
+    # Upload E-Commerce Catalog & Benchmarks lên Staging & Curated
+    catalog_csv = os.path.join(BASE_DIR, "outputs", "ecommerce_product_catalog.csv")
+    if os.path.exists(catalog_csv):
+        df_catalog = pd.read_csv(catalog_csv)
+        with fs.open("staging/online_retail/ecommerce_product_catalog.parquet", "wb") as f:
+            df_catalog.to_parquet(f, index=False, engine="pyarrow", compression="snappy")
+        with fs.open("curated/online_retail/ecommerce_product_catalog.parquet", "wb") as f:
+            df_catalog.to_parquet(f, index=False, engine="pyarrow")
+        print("     ✅ MinIO curated: 'curated/online_retail/ecommerce_product_catalog.parquet'")
+
+    # Đẩy các bảng Curated Parquet lên MinIO (Star Schema Kimball + E-Commerce Catalog)
     curated_tables = {
         "dim_date.parquet": dim_date,
         "dim_location.parquet": dim_location,
         "dim_customer.parquet": dim_customer,
         "dim_product.parquet": dim_product,
-        "fact_sales.parquet": fact_sales,
-        "dim_currency.parquet": df_currency
+        "fact_sales.parquet": fact_sales
     }
     for fname, tdf in curated_tables.items():
         tdf.columns = tdf.columns.str.lower()
@@ -332,9 +331,10 @@ def run_lakehouse_pipeline():
         dim_location.to_sql('dim_location', con, if_exists='append', index=False, method='multi')
         dim_customer.to_sql('dim_customer', con, if_exists='append', index=False, method='multi', chunksize=1000)
         dim_product.to_sql('dim_product', con, if_exists='append', index=False, method='multi', chunksize=1000)
-        curated_tables["dim_currency"].to_sql(
-            'dim_currency', con, if_exists='append', index=False, method='multi'
-        )
+        if "dim_currency" in curated_tables:
+            curated_tables["dim_currency"].to_sql(
+                'dim_currency', con, if_exists='append', index=False, method='multi'
+            )
     
         print(f"  -> Đang nạp fact_sales ({len(fact_sales):,} dòng) vào PostgreSQL...")
         fact_sales.to_sql('fact_sales', con, if_exists='append', index=False, chunksize=20000)

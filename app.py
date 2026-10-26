@@ -436,11 +436,12 @@ st.write("")
 # ------------------------------------------------------------------------------
 # 5. CÁC TABS PHÂN TÍCH CHUYÊN SÂU
 # ------------------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📈 Xu Hướng Doanh Thu",
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📈 Báo Cáo Hiệu Năng Doanh Thu",
+    "🧊 Phân Tích Đa Chiều OLAP Studio",
     "🌍 Thị Trường & Ngành Hàng Sản Phẩm",
-    "👥 Phân Khúc Khách Hàng",
-    "🧺 Gợi Ý Bán Chéo Giỏ Hàng"
+    "👥 Phân Khúc Khách Hàng (RFM)",
+    "🧺 Gợi Ý Bán Chéo Giỏ Hàng (Cross-Sell)"
 ])
 
 active_filters = []
@@ -545,9 +546,172 @@ with tab1:
         """)
 
 # ==============================================================================
-# TAB 2: ĐỊA LÝ & SẢN PHẨM CHỦ LỰC
+# TAB 2: PHÂN TÍCH ĐA CHIỀU (OLAP STUDIO)
 # ==============================================================================
 with tab2:
+    st.subheader("🧊 Phân Tích Trực Tuyến Đa Chiều (OLAP Operations)")
+    st.markdown("""
+    Trực quan hóa và tương tác trực tiếp với **5 thao tác OLAP kinh điển** trên khối dữ liệu bán lẻ:
+    - **Roll-up (Thu gọn)** • **Drill-down (Chi tiết hóa)** • **Slice (Cắt lát đơn)** • **Dice (Cắt khối đa chiều)** • **Pivot (Xoay ma trận)**
+    """)
+
+    olap_op = st.radio(
+        "Lựa chọn thao tác phân tích OLAP:",
+        [
+            "Roll-up (Thu gọn cấp bậc)",
+            "Drill-down (Chi tiết hóa thời gian)",
+            "Slice (Cắt lát đơn theo năm)",
+            "Dice (Cắt khối đa chiều: Vùng & Quý)",
+            "Pivot (Xoay ma trận so sánh quốc gia)"
+        ],
+        horizontal=True
+    )
+
+    if olap_op == "Roll-up (Thu gọn cấp bậc)":
+        st.markdown("##### 🔼 Thao tác ROLL-UP: Gộp dữ liệu từ cấp Tháng lên cấp Quý & Năm")
+        roll_level = st.selectbox("Chọn cấp độ tổng hợp thu gọn:", ["Thu gọn theo NĂM", "Thu gọn theo QUÝ"])
+        
+        if roll_level == "Thu gọn theo NĂM":
+            q_rollup = """
+            SELECT d.Year AS Nam, COUNT(DISTINCT f.InvoiceNo) AS So_Don_Hang, 
+                   SUM(f.Quantity) AS Tong_San_Luong, ROUND(SUM(f.TotalRevenue), 2) AS Tong_Doanh_Thu_GBP
+            FROM Fact_Sales f JOIN Dim_Date d ON f.DateKey = d.DateKey
+            GROUP BY d.Year ORDER BY d.Year;
+            """
+            with get_engine().connect() as conn:
+                df_res = pd.read_sql_query(text(q_rollup), conn)
+            
+            c_r1, c_r2 = st.columns([5, 5])
+            with c_r1:
+                st.dataframe(df_res.style.format({"Tong_Doanh_Thu_GBP": "£{:,.2f}", "So_Don_Hang": "{:,}", "Tong_San_Luong": "{:,}"}), use_container_width=True, hide_index=True)
+            with c_r2:
+                fig_r = px.bar(df_res, x="nam", y="tong_doanh_thu_gbp", text_auto=".2s", title="Tổng Doanh Thu Theo Năm (£ GBP)", color="tong_doanh_thu_gbp", color_continuous_scale="Blues")
+                fig_r.update_layout(height=320, margin=dict(l=20, r=20, t=40, b=20), showlegend=False)
+                st.plotly_chart(fig_r, use_container_width=True)
+
+        else:
+            q_rollup = """
+            SELECT d.Year AS Nam, d.Quarter AS Quy, COUNT(DISTINCT f.InvoiceNo) AS So_Don_Hang,
+                   SUM(f.Quantity) AS Tong_San_Luong, ROUND(SUM(f.TotalRevenue), 2) AS Tong_Doanh_Thu_GBP
+            FROM Fact_Sales f JOIN Dim_Date d ON f.DateKey = d.DateKey
+            GROUP BY d.Year, d.Quarter ORDER BY d.Year, d.Quarter;
+            """
+            with get_engine().connect() as conn:
+                df_res = pd.read_sql_query(text(q_rollup), conn)
+            df_res["Nam_Quy"] = df_res["nam"].astype(str) + " - Q" + df_res["quy"].astype(str)
+            
+            c_r1, c_r2 = st.columns([5, 5])
+            with c_r1:
+                st.dataframe(df_res[["Nam_Quy", "so_don_hang", "tong_san_luong", "tong_doanh_thu_gbp"]].style.format({"tong_doanh_thu_gbp": "£{:,.2f}", "so_don_hang": "{:,}", "tong_san_luong": "{:,}"}), use_container_width=True, hide_index=True)
+            with c_r2:
+                fig_r = px.bar(df_res, x="Nam_Quy", y="tong_doanh_thu_gbp", title="Doanh Thu Theo Quý (£ GBP)", color="tong_doanh_thu_gbp", color_continuous_scale="Teal")
+                fig_r.update_layout(height=320, margin=dict(l=20, r=20, t=40, b=20), showlegend=False)
+                st.plotly_chart(fig_r, use_container_width=True)
+
+    elif olap_op == "Drill-down (Chi tiết hóa thời gian)":
+        st.markdown("##### 🔽 Thao tác DRILL-DOWN: Đi từ Tổng quan Năm xuống chi tiết từng Tháng & Ngày")
+        sel_year = st.selectbox("Chọn năm để xem chi tiết từng tháng:", [2011, 2010])
+        
+        q_drill = f"""
+        SELECT d.YearMonth AS Thang, COUNT(DISTINCT f.InvoiceNo) AS So_Don, 
+               SUM(f.Quantity) AS San_Luong, ROUND(SUM(f.TotalRevenue), 2) AS Doanh_Thu_GBP
+        FROM Fact_Sales f JOIN Dim_Date d ON f.DateKey = d.DateKey
+        WHERE d.Year = {sel_year}
+        GROUP BY d.YearMonth ORDER BY d.YearMonth;
+        """
+        with get_engine().connect() as conn:
+            df_drill = pd.read_sql_query(text(q_drill), conn)
+            
+        c_d1, c_d2 = st.columns([5, 5])
+        with c_d1:
+            st.dataframe(df_drill.style.format({"doanh_thu_gbp": "£{:,.2f}", "so_don": "{:,}", "san_luong": "{:,}"}), use_container_width=True, hide_index=True)
+        with c_d2:
+            fig_drill = px.line(df_drill, x="thang", y="doanh_thu_gbp", markers=True, title=f"Chi Tiết Doanh Thu Các Tháng Năm {sel_year} (£ GBP)", line_shape="spline")
+            fig_drill.update_layout(height=320, margin=dict(l=20, r=20, t=40, b=20))
+            st.plotly_chart(fig_drill, use_container_width=True)
+
+    elif olap_op == "Slice (Cắt lát đơn theo năm)":
+        st.markdown("##### 🔪 Thao tác SLICE: Cắt lát dữ liệu theo một chiều cố định (Năm = 2011)")
+        q_slice = """
+        SELECT d.YearMonth AS Thang, ROUND(SUM(f.TotalRevenue), 2) AS Doanh_Thu_GBP,
+               COUNT(DISTINCT f.InvoiceNo) AS So_Don
+        FROM Fact_Sales f JOIN Dim_Date d ON f.DateKey = d.DateKey
+        WHERE d.Year = 2011
+        GROUP BY d.YearMonth ORDER BY d.YearMonth;
+        """
+        with get_engine().connect() as conn:
+            df_slice = pd.read_sql_query(text(q_slice), conn)
+            
+        c_s1, c_s2 = st.columns([5, 5])
+        with c_s1:
+            st.caption("Lát cắt dữ liệu cố định Năm 2011:")
+            st.dataframe(df_slice.style.format({"doanh_thu_gbp": "£{:,.2f}", "so_don": "{:,}"}), use_container_width=True, hide_index=True)
+        with c_s2:
+            fig_sl = px.bar(df_slice, x="thang", y="doanh_thu_gbp", title="Lát Cắt Doanh Thu Năm 2011", color="doanh_thu_gbp", color_continuous_scale="Purples")
+            fig_sl.update_layout(height=320, margin=dict(l=20, r=20, t=40, b=20), showlegend=False)
+            st.plotly_chart(fig_sl, use_container_width=True)
+
+    elif olap_op == "Dice (Cắt khối đa chiều: Vùng & Quý)":
+        st.markdown("##### 🎲 Thao tác DICE: Lọc đồng thời nhiều chiều (Quý 4 năm 2011 VÀ Thị trường UK, Đức, Pháp)")
+        selected_countries = st.multiselect("Chọn các quốc gia muốn phân tích:", ["United Kingdom", "Germany", "France", "EIRE"], default=["United Kingdom", "Germany", "France"])
+        
+        if selected_countries:
+            in_clause = "'" + "','".join(selected_countries) + "'"
+            q_dice = f"""
+            SELECT d.YearMonth AS Thang, l.Country AS Quoc_Gia, ROUND(SUM(f.TotalRevenue), 2) AS Doanh_Thu_GBP
+            FROM Fact_Sales f
+            JOIN Dim_Date d ON f.DateKey = d.DateKey
+            JOIN Dim_Location l ON f.LocationKey = l.LocationKey
+            WHERE d.Year = 2011 AND d.Quarter = 4 AND l.Country IN ({in_clause})
+            GROUP BY d.YearMonth, l.Country ORDER BY d.YearMonth, l.Country;
+            """
+            with get_engine().connect() as conn:
+                df_dice = pd.read_sql_query(text(q_dice), conn)
+                
+            c_dc1, c_dc2 = st.columns([5, 5])
+            with c_dc1:
+                st.dataframe(df_dice.style.format({"doanh_thu_gbp": "£{:,.2f}"}), use_container_width=True, hide_index=True)
+            with c_dc2:
+                fig_dice = px.bar(df_dice, x="thang", y="doanh_thu_gbp", color="quoc_gia", barmode="group", title="Khối Đa Chiều: Quý 4/2011 theo Quốc Gia")
+                fig_dice.update_layout(height=320, margin=dict(l=20, r=20, t=40, b=20))
+                st.plotly_chart(fig_dice, use_container_width=True)
+
+    else:
+        st.markdown("##### 🔄 Thao tác PIVOT: Xoay chiều dữ liệu (Chuyển Quốc Gia thành các Cột so sánh)")
+        q_pivot = """
+        SELECT d.YearMonth AS Thang,
+               ROUND(SUM(CASE WHEN l.Country = 'United Kingdom' THEN f.TotalRevenue ELSE 0 END), 2) AS UK_GBP,
+               ROUND(SUM(CASE WHEN l.Country = 'Germany' THEN f.TotalRevenue ELSE 0 END), 2) AS Germany_GBP,
+               ROUND(SUM(CASE WHEN l.Country = 'France' THEN f.TotalRevenue ELSE 0 END), 2) AS France_GBP,
+               ROUND(SUM(CASE WHEN l.Country = 'EIRE' THEN f.TotalRevenue ELSE 0 END), 2) AS EIRE_GBP
+        FROM Fact_Sales f
+        JOIN Dim_Date d ON f.DateKey = d.DateKey
+        JOIN Dim_Location l ON f.LocationKey = l.LocationKey
+        GROUP BY d.YearMonth ORDER BY d.YearMonth;
+        """
+        with get_engine().connect() as conn:
+            df_pivot = pd.read_sql_query(text(q_pivot), conn)
+            
+        st.dataframe(
+            df_pivot.style.format({
+                "uk_gbp": "£{:,.2f}", "germany_gbp": "£{:,.2f}", "france_gbp": "£{:,.2f}", "eire_gbp": "£{:,.2f}"
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Biểu đồ so sánh
+        fig_piv = go.Figure()
+        fig_piv.add_trace(go.Bar(x=df_pivot["thang"], y=df_pivot["germany_gbp"], name="Đức (Germany)"))
+        fig_piv.add_trace(go.Bar(x=df_pivot["thang"], y=df_pivot["france_gbp"], name="Pháp (France)"))
+        fig_piv.add_trace(go.Bar(x=df_pivot["thang"], y=df_pivot["eire_gbp"], name="Ireland (EIRE)"))
+        fig_piv.update_layout(title="So Sánh Doanh Thu Thị Trường Châu Âu Trọng Điểm Sau Xoay Pivot (£ GBP)", barmode="stack", height=350, margin=dict(l=20, r=20, t=40, b=20))
+        st.plotly_chart(fig_piv, use_container_width=True)
+
+# ==============================================================================
+# TAB 3: ĐỊA LÝ & SẢN PHẨM CHỦ LỰC
+# ==============================================================================
+with tab3:
     st.subheader("1. Cơ Cấu Thị Trường Địa Lý Theo Bộ Lọc")
     col_g1, col_g2 = st.columns([6, 4])
     
@@ -690,9 +854,9 @@ with tab2:
         st.plotly_chart(fig_top_rev, use_container_width=True)
 
 # ==============================================================================
-# TAB 3: PHÂN KHÚC KHÁCH HÀNG
+# TAB 4: PHÂN KHÚC KHÁCH HÀNG (RFM)
 # ==============================================================================
-with tab3:
+with tab4:
     st.subheader("1. Chân Dung & Phân Khúc Khách Hàng Theo Mô Hình RFM")
     st.caption("RFM và biểu đồ khách hàng được giới hạn theo bộ lọc. Nhãn K-Means là kết quả đã tính toán trên toàn bộ tập khách hàng.")
     
@@ -795,9 +959,9 @@ with tab3:
         st.warning("Chưa tìm thấy file `outputs/rfm_customer_segments.csv`. Hãy chạy `python scripts/05_data_mining.py` trước.")
 
 # ==============================================================================
-# TAB 4: GỢI Ý BÁN CHÉO GIỎ HÀNG
+# TAB 5: GỢI Ý BÁN CHÉO GIỎ HÀNG (CROSS-SELL)
 # ==============================================================================
-with tab4:
+with tab5:
     st.subheader("1. Công Cụ Gợi Ý Bán Kèm Sản Phẩm Thông Minh")
     st.write("Dựa trên thuật toán khai phá luật kết hợp **Apriori** từ hơn 18,000 giỏ hàng.")
     st.caption("Các luật Apriori được khai phá trước trên toàn bộ dữ liệu, không được tính lại theo bộ lọc thị trường hoặc RFM.")
