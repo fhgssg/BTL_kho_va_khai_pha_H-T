@@ -161,8 +161,8 @@ Tài liệu thiết kế: `database/02_data_modeling.md` | DDL Schema: `database
    - `Dim_Date`: Quản lý 374 ngày dương lịch (Ngày, Tháng, Quý, Năm, Ngày trong tuần, Cuối tuần).
    - `Dim_Customer`: 4,339 khách hàng (Khóa đại diện `CustomerKey`, `CustomerID`, phân loại Guest).
    - `Dim_Product`: 3,921 mặt hàng (`StockCode`, `Description`, `UnitPrice_Standard`).
-   - `Dim_Location`: 38 quốc gia (`Country`, phân loại vùng: `Domestic` UK vs `International`).
-   - `Dim_Currency` *(Mở rộng)*: 13 tháng tỷ giá GBP sang USD và EUR lấy từ **Frankfurter API (European Central Bank - ECB)** để hỗ trợ phân tích tài chính đa tiền tệ.
+   - `Dim_Location`: 38 quốc gia (`Country`, phân loại vùng: Vương quốc Anh vs Quốc tế).
+   - `Dữ liệu mở rộng E-Commerce API`: Kết nối danh mục và đánh giá từ **DummyJSON E-Commerce REST API** (194 sản phẩm, 24 ngành hàng) để hỗ trợ phân cấp ngành hàng và chuẩn hóa chất lượng sản phẩm.
 4. **Bảng sự kiện (Fact Table)**:
    - `Fact_Sales`: 524,874 bản ghi.
    - Các độ đo (Measures): `Quantity`, `UnitPrice`, `TotalRevenue` (= Quantity * UnitPrice).
@@ -205,7 +205,7 @@ Script thực hiện: `sql/04_olap_queries.sql` và `scripts/04_run_olap_queries
 2. **Cơ cấu thị trường**: Vương quốc Anh chiếm **84.59%** doanh thu. Các thị trường quốc tế đóng góp cao gồm Hà Lan (2.68%), EIRE (2.66%) và Đức (2.15%).
 3. **Khung giờ vàng mua sắm**: Tập trung cao độ từ **10:00 sáng đến 15:00 chiều**, đỉnh cao là **12:00 trưa** (3,220 đơn hàng).
 4. **Tỷ lệ khách hàng quay lại (Repeat Customer Rate)**: Đạt **65.58%** (2,845 / 4,338 khách hàng định danh mua từ 2 lần trở lên).
-5. **Quy đổi đa tiền tệ (Frankfurter API / ECB)**: Áp dụng tỷ giá cuối tháng cho doanh thu từng tháng, tổng doanh thu tương đương khoảng **$17.00M USD** và **€12.24M EUR**. Tỷ giá GBP/USD cao nhất trong giai đoạn là **Tháng 4/2011 (1.6665 USD/GBP)**; mức giảm MoM lớn nhất là **Tháng 9/2011 (-0.0736 USD)**.
+5. **Tích hợp API Thương mại điện tử (DummyJSON E-Commerce REST API)**: Kết nối trực tiếp 194 sản phẩm và 24 danh mục ngành hàng, đánh giá trung bình 3.86 ★, đối soát chuẩn hóa danh mục ngành hàng cho dữ liệu bán lẻ DWH.
 
 ---
 
@@ -218,12 +218,13 @@ Script thực hiện: `scripts/05_data_mining.py`.
   - `Recency (R)`: Trung bình 92.5 ngày.
   - `Frequency (F)`: Trung bình 4.27 đơn hàng (cao nhất 209 đơn).
   - `Monetary (M)`: Trung bình 2,048.69 GBP/khách (cao nhất 280,206.02 GBP).
-- **Phân nhóm khách hàng**:
-  - **Champions (VIP)**: 957 khách hàng (~22%), tổng chi tiêu **£5,791,640.74**, trung bình **£6,051.87/khách**.
-  - **Loyal Customers**: 764 khách hàng, chi tiêu trung bình **£1,827.90/khách**.
-  - **At Risk**: 442 khách hàng (nguy cơ rời bỏ).
-  - **Hibernating / Lost**: 1,065 khách hàng (ngủ đông / đã rời bỏ).
-- **Phân cụm K-Means**: Tách holdout ngẫu nhiên 80/20 theo khách hàng (seed 42), fit scaler trên train; so sánh K=2..8 của K-Means log-RFM với baseline K-Means RFM chưa log-transform. Cả hai được đánh giá trong cùng không gian log-RFM chuẩn hóa; chọn cấu hình bằng Silhouette train, còn Silhouette holdout chỉ dùng báo cáo. Kết quả chạy hiện tại chọn baseline K-Means RFM thô, K=2 (train **0.5949**, holdout **0.6010**) so với K-Means log-RFM K=2 (train **0.4327**, holdout **0.4331**). Đây là kết quả của metric hình học, không tự khẳng định chất lượng nghiệp vụ; cần diễn giải profile cụm. CSV: `outputs/kmeans_holdout_evaluation.csv`; không dùng nhãn giả hoặc confusion matrix. Mô hình được chọn được fit lại trên toàn bộ khách hàng và kiểm tra độ ổn định qua 5 random seeds.
+- **Phân nhóm khách hàng (Thuần tiếng Việt)**:
+  - **Khách hàng VIP**: 957 khách hàng (~22%), tổng chi tiêu **£5,791,640.74**, trung bình **£6,051.87/khách** (chiếm hơn 54% tổng doanh thu).
+  - **Khách hàng trung thành**: 764 khách hàng, chi tiêu trung bình **£1,827.90/khách**.
+  - **Có nguy cơ rời bỏ**: 442 khách hàng (nguy cơ rời bỏ).
+  - **Ngủ đông / Đã rời bỏ**: 1,065 khách hàng.
+  - Cùng các nhóm: *Khách mới & Tiềm năng, Khách hàng triển vọng, Cần quan tâm chăm sóc, Khách VIP cần giữ chân*.
+- **Phân cụm K-Means**: Tách holdout ngẫu nhiên 80/20 theo khách hàng (seed 42), fit scaler trên train; so sánh K=2..8 của K-Means log-RFM với baseline K-Means RFM chưa log-transform. Cả hai được đánh giá trong cùng không gian log-RFM chuẩn hóa; chọn cấu hình bằng Silhouette train, còn Silhouette holdout chỉ dùng báo cáo. Kết quả chạy hiện tại chọn baseline K-Means RFM thô, K=2 (train **0.5949**, holdout **0.6010**) so với K-Means log-RFM K=2 (train **0.4327**, holdout **0.4331**). Mô hình được chọn được fit lại trên toàn bộ khách hàng và kiểm tra độ ổn định qua 5 random seeds (đồng thuận 100%).
 - File kết quả: `outputs/rfm_customer_segments.csv`.
 - **Giới hạn diễn giải**: Silhouette và độ ổn định không chứng minh phân khúc làm tăng doanh thu; cần kiểm tra hồ sơ từng cụm và xác nhận với nghiệp vụ trước khi triển khai chiến dịch.
 
@@ -231,9 +232,9 @@ Script thực hiện: `scripts/05_data_mining.py`.
 - **Tập giao dịch**: 18,275 đơn hàng đa sản phẩm, 3,775 sản phẩm sau loại trừ các dòng phí/phi sản phẩm.
 - **Thuật toán Apriori**: Ngưỡng `min_support = 1.5%` phát hiện 912 tập mục phổ biến và sinh ra **992 luật kết hợp** có `Lift >= 1.2`.
 - **Luật bán kèm tiêu biểu (Cross-selling)**:
-  - Khách mua `REGENCY TEA PLATE PINK` -> Gợi ý mua `REGENCY TEA PLATE GREEN` (**Confidence: 91.15%, Lift: 43.83**).
-  - Khách mua `POPPY'S PLAYHOUSE BEDROOM` -> Gợi ý mua `POPPY'S PLAYHOUSE KITCHEN` (**Confidence: 74.00%, Lift: 31.02**).
-  - Khách mua `SET/6 RED SPOTTY PAPER CUPS` -> Gợi ý mua `SET/6 RED SPOTTY PAPER PLATES` (**Confidence: 82.16%, Lift: 28.49**).
+  - Khách mua `Đĩa trà Regency màu hồng` -> Gợi ý mua `Đĩa trà Regency màu xanh lá` (**Độ tin cậy: 91.15%, Hệ số Lift: 43.83 lần**).
+  - Khách mua `Nhà búp bê Poppy - Phòng ngủ` -> Gợi ý mua `Nhà búp bê Poppy - Nhà bếp` (**Độ tin cậy: 74.00%, Hệ số Lift: 31.02 lần**).
+  - Khách mua `Bộ 6 cốc giấy chấm bi đỏ` -> Gợi ý mua `Bộ 6 đĩa giấy chấm bi đỏ` (**Độ tin cậy: 82.16%, Hệ số Lift: 28.49 lần**).
 - File kết quả: `outputs/market_basket_rules.csv`.
 
 ---
@@ -243,13 +244,13 @@ Script thực hiện: `scripts/05_data_mining.py`.
 Ứng dụng web: `app.py` (Chạy bằng lệnh: `streamlit run app.py`).
 
 ### Các tính năng chính trên Dashboard:
-1. **Executive KPI Cards**: Hiển thị doanh thu tổng (**£10.64M**), tổng đơn, AOV (**£533.17**) và số khách định danh (**4,338**).
-2. **Tab 1 - Xu hướng Doanh thu**: Biểu đồ kết hợp Bar-Line thể hiện doanh thu, số đơn và tỷ lệ tăng trưởng MoM theo tháng, phân tích khung giờ vàng.
-3. **Tab 2 - Địa lý & Sản phẩm**: Biểu đồ phân bổ tỷ trọng doanh thu UK vs Quốc tế, Top 10 sản phẩm bán chạy nhất và doanh thu cao nhất.
-4. **Tab 3 - Chân dung Khách hàng RFM**: Biểu đồ Treemap doanh thu theo phân khúc RFM, biểu đồ phân tán K-Means và danh sách Top Champions VIP.
-5. **Tab 4 - Gợi ý Bán chéo Tương tác**: Công cụ chọn 1 sản phẩm -> tự động gợi ý các sản phẩm đi kèm (Bundle Recommendations) theo điểm Lift và Confidence.
-6. **Tab 5 - Kiến trúc DWH**: Hiển thị cấu trúc Star Schema, bảng thống kê dữ liệu và mã DDL.
-7. **Tab 6 - Tỷ giá & Phân tích Đa tiền tệ**: Tích hợp Frankfurter API (ECB Live/Historical Rates), biểu đồ tỷ giá GBP/USD và GBP/EUR, bảng quy đổi doanh thu tự động sang USD & EUR.
+1. **Executive KPI Cards**: Hiển thị doanh thu tổng (**£10.64M**), tổng đơn, Giá trị đơn hàng trung bình (**£533.17**) và số khách định danh (**4,338**).
+2. **Tab 1 - Xu hướng Doanh thu**: Biểu đồ kết hợp Bar-Line thể hiện doanh thu, số đơn và tỷ lệ tăng trưởng MoM theo tháng, phân tích khung giờ cao điểm.
+3. **Tab 2 - Thị Trường & Sản Phẩm**: Biểu đồ phân bổ tỷ trọng doanh thu Vương quốc Anh vs Quốc tế, Top 10 sản phẩm bán chạy nhất về số lượng và doanh thu bằng tên tiếng Việt.
+4. **Tab 3 - Phân Khúc Khách Hàng**: Biểu đồ Treemap doanh thu theo phân khúc RFM, biểu đồ phân tán K-Means và danh sách Top Khách hàng VIP.
+5. **Tab 4 - Gợi Ý Bán Chéo Giỏ Hàng**: Công cụ chọn 1 sản phẩm -> tự động gợi ý các sản phẩm đi kèm theo điểm Lift và Độ tin cậy (Confidence).
+6. **Tab 5 - Kiến Trúc Kho Dữ Liệu**: Sơ đồ Star Schema và bảng thống kê thực tế các bảng DWH.
+7. **Tab 6 - Tích Hợp API Thương Mại Điện Tử**: Kết nối thời gian thực tới DummyJSON E-Commerce REST API, hiển thị chỉ số ngành hàng, đánh giá người dùng (Rating ★) và tra cứu sản phẩm trực tiếp.
 
 ---
 

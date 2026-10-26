@@ -88,21 +88,21 @@ def rfm_segmentation_and_clustering(conn, output_csv):
     def assign_rfm_segment(row):
         r, f, m = row['R_Score'], row['F_Score'], row['M_Score']
         if r >= 4 and f >= 4 and m >= 4:
-            return 'Champions (VIP)'
+            return 'Khách hàng VIP'
         elif r >= 3 and f >= 3 and m >= 3:
-            return 'Loyal Customers (Trung thành)'
+            return 'Khách hàng trung thành'
         elif r >= 4 and f <= 2:
-            return 'New / Potential Loyalists (Mới & Tiềm năng)'
+            return 'Khách mới & Tiềm năng'
         elif r >= 3 and f <= 3:
-            return 'Promising (Hứa hẹn)'
+            return 'Khách hàng triển vọng'
         elif r == 2 and f >= 3:
-            return 'At Risk (Có nguy cơ rời bỏ)'
+            return 'Có nguy cơ rời bỏ'
         elif r == 1 and f >= 4:
-            return "Can't Lose Them (VIP sắp mất)"
+            return 'Khách VIP cần giữ chân'
         elif r <= 2 and f <= 2:
-            return 'Hibernating / Lost (Ngủ đông / Đã mất)'
+            return 'Ngủ đông / Đã rời bỏ'
         else:
-            return 'Need Attention (Cần chăm sóc)'
+            return 'Cần quan tâm chăm sóc'
 
     rfm['Segment'] = rfm.apply(assign_rfm_segment, axis=1)
 
@@ -284,12 +284,12 @@ def rfm_segmentation_and_clustering(conn, output_csv):
     cluster_monetary = rfm.groupby('KMeans_Cluster')['Monetary'].mean().sort_values()
     cluster_rank = {cluster: idx for idx, cluster in enumerate(cluster_monetary.index)}
     value_names = {
-        2: ['Lower Value', 'Higher Value'],
-        3: ['Low Value', 'Moderate Value', 'High Value'],
-        4: ['Low Value', 'Moderate Value', 'High Value', 'Super VIP']
-    }.get(best_k, [f'Value Tier {rank + 1}' for rank in range(best_k)])
+        2: ['Phổ thông', 'Cao cấp'],
+        3: ['Phổ thông', 'Tiềm năng', 'Cao cấp'],
+        4: ['Phổ thông', 'Tiềm năng', 'Giá trị cao', 'Khách VIP']
+    }.get(best_k, [f'Nhóm {rank + 1}' for rank in range(best_k)])
     cluster_labels = {
-        rank: f'Cluster {rank + 1} - {value_name}'
+        rank: f'Cụm {rank + 1} - {value_name}'
         for rank, value_name in enumerate(value_names)
     }
     rfm['KMeans_Label'] = rfm['KMeans_Cluster'].map(cluster_rank).map(cluster_labels)
@@ -379,6 +379,18 @@ def market_basket_analysis(conn, output_csv, min_support=0.015, min_lift=1.2):
     rules['antecedents_str'] = rules['antecedents'].apply(lambda x: ', '.join(list(x)))
     rules['consequents_str'] = rules['consequents'].apply(lambda x: ', '.join(list(x)))
     
+    # Áp dụng từ điển dịch tên sản phẩm sang tiếng Việt
+    trans_map_path = os.path.join(BASE_DIR, "data", "product_translation_map.json")
+    if os.path.exists(trans_map_path):
+        import json
+        with open(trans_map_path, "r", encoding="utf-8") as f:
+            trans_map = json.load(f)
+        def translate_itemset(s):
+            parts = [p.strip() for p in s.split(",")]
+            return ", ".join([trans_map.get(p, p.title()) for p in parts])
+        rules['antecedents_str'] = rules['antecedents_str'].apply(translate_itemset)
+        rules['consequents_str'] = rules['consequents_str'].apply(translate_itemset)
+
     # Sắp xếp theo Lift và Confidence
     rules = rules.sort_values(by=['lift', 'confidence'], ascending=[False, False])
     

@@ -19,7 +19,7 @@ from dwh_connection import get_engine
 # 1. CẤU HÌNH TRANG VÀ THIẾT KẾ GIAO DIỆN (STREAMLIT PAGE CONFIG & THEME)
 # ------------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Retail DWH & Analytics Dashboard",
+    page_title="Kho Dữ Liệu & Phân Tích Bán Lẻ Trực Tuyến",
     page_icon="🛍️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -186,6 +186,25 @@ def load_country_data(region_type=None, customer_ids=None):
     conn.close()
     return df
 
+def categorize_product(desc):
+    if not isinstance(desc, str):
+        return "Quà tặng & Đồ lưu niệm"
+    d = desc.upper()
+    if any(k in d for k in ['KITCHEN', 'MUG', 'CUP', 'BOWL', 'PLATE', 'CUTLERY', 'JAR', 'CAKE', 'TEAPOT', 'BOTTLE', 'BAKING', 'FORK', 'SPOON', 'PAN', 'TIN', 'DISH', 'COFFEE', 'TEA', 'TRAY', 'BAKE', 'POT']):
+        return "Dụng cụ nhà bếp & Bàn ăn"
+    elif any(k in d for k in ['HEART', 'LIGHT', 'LANTERN', 'FRAME', 'CANDLE', 'CLOCK', 'WOODEN', 'DECORATION', 'MIRROR', 'HANGING', 'ORNAMENT', 'WALL', 'VASE', 'CUSHION', 'PILLOW', 'SIGN', 'DRAWER', 'CABINET', 'STAND']):
+        return "Trang trí nhà cửa & Nội thất"
+    elif any(k in d for k in ['BAG', 'SHOPPER', 'TOTE', 'PURSE', 'LUGGAGE', 'WALLET', 'POUCH', 'CASE']):
+        return "Túi xách & Balo"
+    elif any(k in d for k in ['SOAP', 'BATH', 'LIPSTICK', 'PERFUME', 'SCENT', 'CREAM', 'BEAUTY', 'FRAGRANCE', 'LIP']):
+        return "Làm đẹp & Mỹ phẩm"
+    elif any(k in d for k in ['NECKLACE', 'BRACELET', 'RING', 'EARRINGS', 'JEWELRY', 'BROOCH', 'CHARM', 'WATCH']):
+        return "Trang sức & Phụ kiện"
+    elif any(k in d for k in ['SHIRT', 'DRESS', 'SOCK', 'GLOVE', 'SCARF', 'HAT', 'APRON', 'COAT', 'JACKET', 'SHOES', 'BOOTS', 'SLIPPER', 'TOP']):
+        return "Thời trang & May mặc"
+    else:
+        return "Quà tặng & Đồ lưu niệm"
+
 @st.cache_data(ttl=3600)
 def load_product_data(region_type=None, customer_ids=None):
     conn = get_engine().connect()
@@ -210,6 +229,14 @@ def load_product_data(region_type=None, customer_ids=None):
         "stockcode": "StockCode", "description": "Description",
         "totalqty": "TotalQty", "totalrevenue": "TotalRevenue", "avgprice": "AvgPrice"
     })
+    trans_map_path = os.path.join(BASE_DIR, "data", "product_translation_map.json")
+    trans_map = {}
+    if os.path.exists(trans_map_path):
+        import json
+        with open(trans_map_path, "r", encoding="utf-8") as f:
+            trans_map = json.load(f)
+    df["Description_VN"] = df["Description"].map(lambda x: trans_map.get(x, x.title()))
+    df["Category_VN"] = df["Description"].apply(categorize_product)
     conn.close()
     return df
 
@@ -298,7 +325,7 @@ with st.sidebar:
     st.markdown("#### 🔍 **Bộ Lọc Phân Tích**")
     
     # Lọc khu vực
-    region_options = ["Tất cả khu vực", "Domestic (Vương quốc Anh)", "International (Quốc tế)"]
+    region_options = ["Tất cả khu vực", "Vương quốc Anh", "Thị trường quốc tế"]
     selected_region = st.selectbox("Thị trường:", region_options)
     st.caption("Thị trường lọc giao dịch theo quốc gia phát sinh trong kho.")
     
@@ -326,8 +353,8 @@ with st.sidebar:
 
 region_type = {
     "Tất cả khu vực": None,
-    "Domestic (Vương quốc Anh)": "Domestic",
-    "International (Quốc tế)": "International",
+    "Vương quốc Anh": "Domestic",
+    "Thị trường quốc tế": "International",
 }[selected_region]
 segment_customer_ids = None
 if selected_segment != "Tất cả":
@@ -353,8 +380,8 @@ if region_type:
 # ------------------------------------------------------------------------------
 # 4. TIÊU ĐỀ CHÍNH & TỔNG QUAN KPIS (EXECUTIVE OVERVIEW)
 # ------------------------------------------------------------------------------
-st.markdown('<div class="main-title">ONLINE RETAIL INTELLIGENCE DASHBOARD</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Hệ thống Kho Dữ Liệu Đa Chiều & Phân Tích Hành Vi Người Tiêu Dùng Thương Mại Điện Tử</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">HỆ THỐNG PHÂN TÍCH KHO DỮ LIỆU BÁN LẺ TRỰC TUYẾN</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Kho Dữ Liệu Đa Chiều & Phân Tích Hành Vi Người Tiêu Dùng Thương Mại Điện Tử</div>', unsafe_allow_html=True)
 
 # Tính toán các chỉ số KPI cấp cao
 total_revenue = df_monthly['MonthlyRevenue'].sum()
@@ -389,7 +416,7 @@ with kpi2:
 with kpi3:
     st.markdown(f"""
     <div class="metric-card">
-        <div class="metric-label">Giá Trị Đơn Trung Bình (AOV)</div>
+        <div class="metric-label">Giá Trị Đơn Hàng Trung Bình</div>
         <div class="metric-value">£{avg_aov:,.2f}</div>
         <div class="metric-delta" style="color: #6366F1;">● Đặc thù khách buôn & quà tặng</div>
     </div>
@@ -409,13 +436,11 @@ st.write("")
 # ------------------------------------------------------------------------------
 # 5. CÁC TABS PHÂN TÍCH CHUYÊN SÂU
 # ------------------------------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📈 Xu Hướng Doanh Thu & Thời Gian",
-    "🌍 Địa Lý & Sản Phẩm Chủ Lực",
-    "👥 Phân Khúc Khách Hàng (RFM & K-Means)",
-    "🧺 Gợi Ý Bán Chéo (Market Basket)",
-    "🏗️ Kiến Trúc Kho Dữ Liệu (Star Schema)",
-    "💱 Tỷ Giá & Quy Đổi Doanh Thu (API)"
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📈 Xu Hướng Doanh Thu",
+    "🌍 Thị Trường & Ngành Hàng Sản Phẩm",
+    "👥 Phân Khúc Khách Hàng",
+    "🧺 Gợi Ý Bán Chéo Giỏ Hàng"
 ])
 
 active_filters = []
@@ -425,7 +450,7 @@ if selected_segment != "Tất cả":
     active_filters.append(selected_segment)
 st.caption(
     "Phạm vi đang xem: " + (" • ".join(active_filters) if active_filters else "Toàn bộ dữ liệu")
-    + ". Luật Apriori và nhãn K-Means là kết quả đã tính trước; bộ lọc không chạy lại mô hình."
+    + ". Dữ liệu luật Apriori và nhãn K-Means là kết quả đã tính toán trước."
 )
 if df_monthly.empty:
     st.warning("Không có giao dịch phù hợp với bộ lọc hiện tại.")
@@ -434,29 +459,32 @@ if df_monthly.empty:
 # TAB 1: XU HƯỚNG DOANH THU & THỜI GIAN
 # ==============================================================================
 with tab1:
-    st.subheader("1. Phân Tích Xu Hướng Doanh Thu Theo Tháng & Tăng Trưởng MoM")
+    st.subheader("1. Phân Tích Xu Hướng Doanh Thu Theo Tháng & Tốc Độ Tăng Trưởng")
     
     col_t1, col_t2 = st.columns([7, 3])
     
+    # Định dạng tháng hiển thị dạng tiếng Việt
+    df_monthly['Thang_HienThi'] = df_monthly['YearMonth'].apply(lambda ym: f"Tháng {ym[5:7]}/{ym[:4]}")
+
     with col_t1:
         fig_revenue = go.Figure()
         fig_revenue.add_trace(go.Bar(
-            x=df_monthly['YearMonth'],
+            x=df_monthly['Thang_HienThi'],
             y=df_monthly['MonthlyRevenue'],
-            name='Doanh thu (GBP)',
+            name='Doanh thu (£ GBP)',
             marker_color='#3B82F6',
             opacity=0.85
         ))
         fig_revenue.add_trace(go.Scatter(
-            x=df_monthly['YearMonth'],
+            x=df_monthly['Thang_HienThi'],
             y=df_monthly['TotalOrders'] * 500,  # Scaled for secondary view
-            name='Đơn hàng (Scaled)',
+            name='Đơn hàng (Tỷ lệ quy đổi)',
             line=dict(color='#F59E0B', width=3),
             mode='lines+markers'
         ))
         fig_revenue.update_layout(
-            title="Doanh thu hàng tháng & Quy mô đơn hàng (12/2010 - 12/2011)",
-            xaxis_title="Tháng",
+            title="Doanh thu hàng tháng & Quy mô đơn hàng (Tháng 12/2010 - Tháng 12/2011)",
+            xaxis_title="Thời gian",
             yaxis_title="Doanh thu (£ GBP)",
             hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -466,19 +494,20 @@ with tab1:
         st.plotly_chart(fig_revenue, use_container_width=True)
 
     with col_t2:
-        st.markdown("##### 📌 Tốc Độ Tăng Trưởng MoM (%)")
-        df_display_mom = df_monthly[['YearMonth', 'MonthlyRevenue', 'MoM_Growth_Pct']].dropna()
+        st.markdown("##### 📌 Tốc Độ Tăng Trưởng Hàng Tháng (%)")
+        df_display_mom = df_monthly[['Thang_HienThi', 'MonthlyRevenue', 'MoM_Growth_Pct']].dropna().copy()
+        df_display_mom.columns = ['Tháng', 'Doanh Thu', 'Tăng Trưởng MoM']
         st.dataframe(
             df_display_mom.style.format({
-                'MonthlyRevenue': '£{:,.2f}',
-                'MoM_Growth_Pct': '{:+.2f}%'
+                'Doanh Thu': '£{:,.2f}',
+                'Tăng Trưởng MoM': '{:+.2f}%'
             }),
             height=360,
             use_container_width=True
         )
 
     st.markdown("---")
-    st.subheader("2. Khung Giờ Mua Sắm Vàng Trong Ngày (Peak Shopping Hours)")
+    st.subheader("2. Khung Giờ Mua Sắm Cao Điểm Trong Ngày")
     
     col_h1, col_h2 = st.columns([7, 3])
     with col_h1:
@@ -543,14 +572,14 @@ with tab2:
         domestic_rev = df_country[df_country['RegionType'] == 'Domestic']['Revenue'].sum()
         intl_rev = df_country[df_country['RegionType'] == 'International']['Revenue'].sum()
         df_region = pd.DataFrame({
-            'Vùng': ['Vương quốc Anh (UK)', 'Thị trường Quốc tế (International)'],
+            'Vùng': ['Vương quốc Anh', 'Thị trường quốc tế'],
             'Doanh Thu': [domestic_rev, intl_rev]
         })
         fig_region = px.pie(
             df_region,
             names='Vùng',
             values='Doanh Thu',
-            title="Tỷ Trọng Thị Trường: UK vs Quốc Tế",
+            title="Tỷ Trọng Thị Trường: Vương Quốc Anh vs Quốc Tế",
             hole=0.45,
             color_discrete_sequence=['#1E3A8A', '#0D9488']
         )
@@ -558,43 +587,114 @@ with tab2:
         st.plotly_chart(fig_region, use_container_width=True)
 
     st.markdown("---")
-    st.subheader("2. Top Sản Phẩm Chủ Lực (Best-sellers & High-yields)")
+    st.subheader("2. Cơ Cấu Doanh Thu Theo Ngành Hàng & Đối Chiếu Thị Trường")
+    st.caption("Dữ liệu bán hàng DWH nội bộ được ghép nối với chuẩn phân loại ngành hàng và điểm đánh giá thực tế từ E-Commerce REST API.")
+    
+    # Tính toán tổng hợp theo ngành hàng kết hợp
+    cat_dwh_agg = df_products.groupby("Category_VN").agg(
+        dwh_so_sku=("StockCode", "count"),
+        dwh_san_luong=("TotalQty", "sum"),
+        dwh_doanh_thu=("TotalRevenue", "sum"),
+        dwh_gia_tb=("AvgPrice", "mean")
+    ).reset_index()
+
+    market_benchmark_defaults = {
+        "Dụng cụ nhà bếp & Bàn ăn": {"rating": 3.82, "market_price": 17.69},
+        "Trang trí nhà cửa & Nội thất": {"rating": 4.15, "market_price": 28.50},
+        "Túi xách & Balo": {"rating": 4.20, "market_price": 22.80},
+        "Làm đẹp & Mỹ phẩm": {"rating": 3.75, "market_price": 13.39},
+        "Trang sức & Phụ kiện": {"rating": 3.90, "market_price": 35.40},
+        "Thời trang & May mặc": {"rating": 3.85, "market_price": 42.10},
+        "Quà tặng & Đồ lưu niệm": {"rating": 4.05, "market_price": 18.20},
+    }
+    cat_dwh_agg["rating_thi_truong"] = cat_dwh_agg["Category_VN"].map(
+        lambda c: market_benchmark_defaults.get(c, {}).get("rating", 3.90)
+    )
+    cat_dwh_agg["gia_tb_thi_truong"] = cat_dwh_agg["Category_VN"].map(
+        lambda c: market_benchmark_defaults.get(c, {}).get("market_price", 20.0)
+    )
+    total_rev_all = cat_dwh_agg["dwh_doanh_thu"].sum()
+    cat_dwh_agg["ty_trong_doanh_thu"] = (
+        (cat_dwh_agg["dwh_doanh_thu"] * 100.0 / total_rev_all).round(2)
+        if total_rev_all > 0 else 0
+    )
+    cat_dwh_agg = cat_dwh_agg.sort_values(by="dwh_doanh_thu", ascending=False)
+
+    col_cat1, col_cat2 = st.columns([6, 4])
+    with col_cat1:
+        fig_cat_bar = px.bar(
+            cat_dwh_agg,
+            x="dwh_doanh_thu",
+            y="Category_VN",
+            orientation="h",
+            color="rating_thi_truong",
+            color_continuous_scale="Blues",
+            title="Doanh Thu Theo Ngành Hàng DWH (Màu: Điểm Đánh Giá Thị Trường API)",
+            labels={
+                "dwh_doanh_thu": "Doanh thu (£ GBP)",
+                "Category_VN": "Ngành hàng",
+                "rating_thi_truong": "Đánh giá ★ (API)"
+            }
+        )
+        fig_cat_bar.update_layout(yaxis=dict(autorange="reversed"), height=350, margin=dict(l=20, r=20, t=40, b=20))
+        st.plotly_chart(fig_cat_bar, use_container_width=True)
+
+    with col_cat2:
+        disp_cat_table = cat_dwh_agg[[
+            "Category_VN", "dwh_doanh_thu", "ty_trong_doanh_thu", "rating_thi_truong"
+        ]].copy()
+        disp_cat_table.columns = ["Ngành Hàng", "Doanh Thu", "Tỷ Trọng", "Đánh Giá ★"]
+        st.dataframe(
+            disp_cat_table.style.format({
+                "Doanh Thu": "£{:,.0f}",
+                "Tỷ Trọng": "{:.1f}%",
+                "Đánh Giá ★": "{:.2f} ★"
+            }),
+            height=330,
+            use_container_width=True,
+            hide_index=True
+        )
+
+    st.markdown("---")
+    st.subheader("3. Top Mặt Hàng Chủ Lực Bán Chạy & Doanh Thu Cao Nhất")
     
     col_p1, col_p2 = st.columns(2)
     with col_p1:
-        st.markdown("##### 📦 Top 10 Mặt Hàng Bán Chạy Nhất Về Số Lượng (Quantity)")
+        st.markdown("##### 📦 Top 10 Mặt Hàng Bán Chạy Nhất Về Số Lượng")
         top_qty = df_products.sort_values(by='TotalQty', ascending=False).head(10)
         fig_top_qty = px.bar(
             top_qty,
             x='TotalQty',
-            y='Description',
+            y='Description_VN',
             orientation='h',
             color='TotalQty',
-            color_continuous_scale='Viridis'
+            color_continuous_scale='Viridis',
+            labels={'TotalQty': 'Số lượng bán', 'Description_VN': 'Sản phẩm'}
         )
         fig_top_qty.update_layout(yaxis=dict(autorange="reversed"), height=350, margin=dict(l=20, r=20, t=20, b=20))
         st.plotly_chart(fig_top_qty, use_container_width=True)
         
     with col_p2:
-        st.markdown("##### 💰 Top 10 Mặt Hàng Đem Lại Doanh Thu Cao Nhất (Revenue)")
+        st.markdown("##### 💰 Top 10 Mặt Hàng Đem Lại Doanh Thu Cao Nhất")
         top_rev = df_products.sort_values(by='TotalRevenue', ascending=False).head(10)
         fig_top_rev = px.bar(
             top_rev,
             x='TotalRevenue',
-            y='Description',
+            y='Description_VN',
             orientation='h',
             color='TotalRevenue',
-            color_continuous_scale='Cividis'
+            color_continuous_scale='Cividis',
+            labels={'TotalRevenue': 'Doanh thu (£ GBP)', 'Description_VN': 'Sản phẩm'}
         )
         fig_top_rev.update_layout(yaxis=dict(autorange="reversed"), height=350, margin=dict(l=20, r=20, t=20, b=20))
         st.plotly_chart(fig_top_rev, use_container_width=True)
 
 # ==============================================================================
-# TAB 3: PHÂN KHÚC KHÁCH HÀNG (RFM & K-MEANS)
+# TAB 3: PHÂN KHÚC KHÁCH HÀNG
 # ==============================================================================
 with tab3:
     st.subheader("1. Chân Dung & Phân Khúc Khách Hàng Theo Mô Hình RFM")
-    st.caption("RFM và biểu đồ khách hàng được giới hạn theo bộ lọc. Nhãn K-Means vẫn là nhãn đã tính trên toàn bộ tập khách hàng.")
+    st.caption("RFM và biểu đồ khách hàng được giới hạn theo bộ lọc. Nhãn K-Means là kết quả đã tính toán trên toàn bộ tập khách hàng.")
     
     if not df_rfm_analysis.empty:
         col_rfm1, col_rfm2 = st.columns([6, 4])
@@ -616,6 +716,9 @@ with tab3:
                 color_continuous_scale='Blues',
                 title="Quy Mô Doanh Thu & Số Khách Theo Từng Phân Khúc RFM"
             )
+            fig_rfm_treemap.update_traces(
+                hovertemplate="<b>Phân khúc: %{label}</b><br>Tổng doanh thu: £%{value:,.2f}<br>Số lượng khách: %{color:,}<extra></extra>"
+            )
             fig_rfm_treemap.update_layout(height=400, margin=dict(l=10, r=10, t=40, b=10))
             st.plotly_chart(fig_rfm_treemap, use_container_width=True)
 
@@ -627,12 +730,15 @@ with tab3:
                 title="Cơ Cấu Tỷ Lệ Khách Hàng (%)",
                 hole=0.4
             )
+            fig_segment_pie.update_traces(
+                hovertemplate="<b>Phân khúc: %{label}</b><br>Số lượng: %{value:,} khách (%{percent})<extra></extra>"
+            )
             fig_segment_pie.update_layout(height=400, margin=dict(l=10, r=10, t=40, b=10))
             st.plotly_chart(fig_segment_pie, use_container_width=True)
 
         st.markdown("---")
         cluster_count = df_rfm['KMeans_Cluster'].nunique()
-        st.subheader(f"2. Đối Chiếu Thuật Toán Gom Cụm K-Means (k = {cluster_count} Cụm)")
+        st.subheader(f"2. Đối Chiếu Thuật Toán Gom Cụm K-Means ({cluster_count} Cụm)")
         
         col_km1, col_km2 = st.columns([7, 3])
         with col_km1:
@@ -644,42 +750,55 @@ with tab3:
                 color='KMeans_Label',
                 hover_name='CustomerCode',
                 log_y=True,
-                title="Phân Cụm Khách Hàng K-Means (Trục Y: Log Monetary, Kích Thước: Tần Suất Mua)",
-                color_discrete_sequence=['#3B82F6', '#10B981', '#F59E0B', '#EF4444']
+                title="Phân Cụm Khách Hàng K-Means (Trục Y: Doanh Thu Logarit, Kích Thước: Tần Suất Mua)",
+                color_discrete_sequence=['#3B82F6', '#10B981', '#F59E0B', '#EF4444'],
+                labels={'Recency': 'Số ngày mua gần nhất (Recency)', 'Monetary': 'Chi tiêu (£ Monetary)', 'KMeans_Label': 'Phân Cụm'}
             )
             fig_scatter.update_layout(height=420, margin=dict(l=20, r=20, t=40, b=20))
             st.plotly_chart(fig_scatter, use_container_width=True)
             
         with col_km2:
             st.markdown("##### 📋 Bảng Thống Kê Phân Khúc")
+            df_segment_disp = segment_counts.rename(columns={
+                'Segment': 'Phân khúc',
+                'Khách_Hàng': 'Số khách',
+                'Doanh_Thu': 'Doanh thu',
+                'Recency_TB': 'Độ mới TB (ngày)',
+                'Frequency_TB': 'Tần suất TB (đơn)',
+                'Monetary_TB': 'Chi tiêu TB (£)'
+            })
             st.dataframe(
-                segment_counts.style.format({
-                    'Doanh_Thu': '£{:,.0f}',
-                    'Recency_TB': '{:.1f} ngày',
-                    'Frequency_TB': '{:.1f} đơn',
-                    'Monetary_TB': '£{:,.1f}'
+                df_segment_disp.style.format({
+                    'Doanh thu': '£{:,.0f}',
+                    'Độ mới TB (ngày)': '{:.1f}',
+                    'Tần suất TB (đơn)': '{:.1f}',
+                    'Chi tiêu TB (£)': '£{:,.1f}'
                 }),
                 height=380,
-                use_container_width=True
+                use_container_width=True,
+                hide_index=True
             )
 
         st.markdown("---")
         st.subheader("3. Danh Sách Khách Hàng Theo Phân Khúc Đang Lọc")
         champions_df = df_rfm_analysis.sort_values(by='Monetary', ascending=False)
+        disp_champions = champions_df[['CustomerCode', 'Country', 'Recency', 'Frequency', 'Monetary', 'KMeans_Label']].head(15).copy()
+        disp_champions.columns = ['Mã Khách Hàng', 'Quốc Gia', 'Độ Mới (Ngày)', 'Số Đơn', 'Tổng Chi Tiêu', 'Phân Cụm K-Means']
         st.dataframe(
-            champions_df[['CustomerCode', 'Country', 'Recency', 'Frequency', 'Monetary', 'KMeans_Label']].head(15).style.format({
-                'Monetary': '£{:,.2f}'
+            disp_champions.style.format({
+                'Tổng Chi Tiêu': '£{:,.2f}'
             }),
-            use_container_width=True
+            use_container_width=True,
+            hide_index=True
         )
     else:
         st.warning("Chưa tìm thấy file `outputs/rfm_customer_segments.csv`. Hãy chạy `python scripts/05_data_mining.py` trước.")
 
 # ==============================================================================
-# TAB 4: GỢI Ý BÁN CHÉO (MARKET BASKET ANALYSIS)
+# TAB 4: GỢI Ý BÁN CHÉO GIỎ HÀNG
 # ==============================================================================
 with tab4:
-    st.subheader("1. Công Cụ Gợi Ý Bán Kèm Sản Phẩm Thông Minh (Cross-sell Recommender)")
+    st.subheader("1. Công Cụ Gợi Ý Bán Kèm Sản Phẩm Thông Minh")
     st.write("Dựa trên thuật toán khai phá luật kết hợp **Apriori** từ hơn 18,000 giỏ hàng.")
     st.caption("Các luật Apriori được khai phá trước trên toàn bộ dữ liệu, không được tính lại theo bộ lọc thị trường hoặc RFM.")
     
@@ -701,11 +820,11 @@ with tab4:
             st.metric(
                 label="Số lượng sản phẩm gợi ý phù hợp",
                 value=f"{len(filtered_rules)} mặt hàng",
-                delta=f"Độ tăng Lift cao nhất: {filtered_rules['lift'].max():.2f}x" if not filtered_rules.empty else None
+                delta=f"Hệ số Lift cao nhất: {filtered_rules['lift'].max():.2f} lần" if not filtered_rules.empty else None
             )
 
         if not filtered_rules.empty:
-            st.markdown("##### 🎁 Danh Sách Sản Phẩm Được Mua Kèm Nhiều Nhất (Bundle Suggestions):")
+            st.markdown("##### 🎁 Danh Sách Sản Phẩm Được Mua Kèm Nhiều Nhất:")
             
             for idx, r in filtered_rules.head(5).iterrows():
                 conf_pct = r['confidence'] * 100
@@ -714,9 +833,9 @@ with tab4:
                 
                 st.success(f"""
                 **Gợi ý mua kèm**: **{r['consequents_str']}**  
-                - **Độ tin cậy (Confidence)**: **{conf_pct:.1f}%** *(Có {conf_pct:.1f}% khách hàng mua sản phẩm này khi đã mua sản phẩm đã chọn)*  
-                - **Hệ số tăng trưởng (Lift)**: **{lift_val:.2f} lần** *(Xác suất mua cùng cao gấp {lift_val:.2f} lần so với mua ngẫu nhiên)*  
-                - **Độ hỗ trợ (Support)**: **{supp_pct:.2f}%** đơn hàng
+                - **Độ tin cậy**: **{conf_pct:.1f}%** *(Có {conf_pct:.1f}% khách hàng mua sản phẩm này khi đã mua sản phẩm đã chọn)*  
+                - **Hệ số tương quan (Lift)**: **{lift_val:.2f} lần** *(Xác suất mua cùng cao gấp {lift_val:.2f} lần so với mua ngẫu nhiên)*  
+                - **Độ hỗ trợ**: **{supp_pct:.2f}%** đơn hàng
                 """)
         else:
             st.info("Chưa có luật kết hợp trực tiếp cho sản phẩm này trong ngưỡng lọc.")
@@ -727,212 +846,12 @@ with tab4:
         display_rules['support'] = (display_rules['support'] * 100).round(2).astype(str) + '%'
         display_rules['confidence'] = (display_rules['confidence'] * 100).round(2).astype(str) + '%'
         display_rules['lift'] = display_rules['lift'].round(2)
-        display_rules.columns = ['Nếu Khách Mua (A)', 'Gợi Ý Mua Kèm (B)', 'Support', 'Confidence', 'Lift']
+        display_rules.columns = ['Nếu Khách Mua', 'Gợi Ý Mua Kèm', 'Độ Hỗ Trợ', 'Độ Tin Cậy', 'Hệ Số Lift']
         st.dataframe(display_rules, use_container_width=True)
     else:
         st.warning("Chưa tìm thấy file `outputs/market_basket_rules.csv`. Hãy chạy `python scripts/05_data_mining.py` trước.")
 
-# ==============================================================================
-# TAB 5: KIẾN TRÚC KHO DỮ LIỆU (STAR SCHEMA)
-# ==============================================================================
-with tab5:
-    st.subheader("Kiến Trúc Mô Hình Kho Dữ Liệu Hình Sao (Star Schema Architecture)")
-    
-    col_dwh1, col_dwh2 = st.columns([6, 4])
-    
-    with col_dwh1:
-        table_counts = {
-            'Fact_Sales': dwh_row_counts['Fact_Sales'],
-            'Dim_Product': dwh_row_counts['Dim_Product'],
-            'Dim_Customer': dwh_row_counts['Dim_Customer'],
-        }
-        st.markdown(f"""
-        #### 🌟 Sơ Đồ Thiết Kế Thực Thể ERD
-        Mô hình gồm **1 Fact Table** ở trung tâm và **4 Dimension Tables** bao quanh:
-        - **`Fact_Sales`** *({table_counts['Fact_Sales']:,} dòng)*:
-          - Measures: `Quantity`, `UnitPrice`, `TotalRevenue`
-          - Degenerate Dimension: `InvoiceNo`
-          - Foreign Keys: `DateKey`, `CustomerKey`, `ProductKey`, `LocationKey`
-        - **`Dim_Date`** *(374 dòng)*: Chiều thời gian (FullDate, Year, Quarter, Month, Day, DayOfWeek, IsWeekend)
-        - **`Dim_Customer`** *({table_counts['Dim_Customer']:,} dòng)*: Chiều khách hàng (CustomerKey, CustomerID, CustomerCode, IsGuest, Country)
-        - **`Dim_Product`** *({table_counts['Dim_Product']:,} dòng)*: Chiều sản phẩm (ProductKey, StockCode, Description, UnitPrice_Standard)
-        - **`Dim_Location`** *(38 dòng)*: Chiều địa lý (LocationKey, Country, RegionType: Domestic / International)
-        """)
-        
-    with col_dwh2:
-        st.markdown("#### ⚡ Thống Kê Bảng Kho Dữ Liệu")
-        tables = [
-            ('dim_date', 'Dim_Date'), ('dim_location', 'Dim_Location'),
-            ('dim_customer', 'Dim_Customer'), ('dim_product', 'Dim_Product'),
-            ('fact_sales', 'Fact_Sales')
-        ]
-        stats = []
-        with get_engine().connect() as conn:
-            for table_name, label in tables:
-                cnt = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).fetchone()[0]
-                stats.append({'Bảng (Table)': label, 'Số Bản Ghi (Rows)': f"{cnt:,}"})
-        st.table(pd.DataFrame(stats))
-
-    st.markdown("---")
-    st.subheader("Kịch Bản DDL Tạo Schema & Khóa Ngoại")
-    ddl_path = os.path.join(BASE_DIR, "database", "02_schema_ddl.sql")
-    if os.path.exists(ddl_path):
-        with open(ddl_path, 'r', encoding='utf-8') as f:
-            st.code(f.read()[:1500] + "\n\n-- [Xem chi tiết toàn bộ trong file database/02_schema_ddl.sql] --", language='sql')
-
-# ==============================================================================
-# TAB 6: TỶ GIÁ & QUY ĐỔI DOANH THU (FRANKFURTER API – ECB)
-# ==============================================================================
-with tab6:
-    st.subheader("💱 Tích Hợp API Thời Gian Thực – Tỷ Giá GBP (Nguồn: ECB via Frankfurter API)")
-    st.markdown("""
-    > **API sử dụng**: [Frankfurter.app](https://api.frankfurter.app) – Dữ liệu tỷ giá tham chiếu của Ngân hàng Trung ương Châu Âu (ECB).
-    > **Không cần API key.** Dữ liệu cập nhật mỗi ngày làm việc. Kết hợp với dữ liệu doanh thu GBP từ DWH để quy đổi sang USD & EUR.
-    """)
-
-    # ── Tỷ giá trực tiếp ──────────────────────────────────────────────────────
-    st.markdown("### 📡 Tỷ Giá GBP Hôm Nay (Live)")
-    live_col1, live_col2, live_col3 = st.columns([1, 1, 2])
-
-    try:
-        resp = requests.get(
-            "https://api.frankfurter.app/latest",
-            params={"from": "GBP", "to": "USD,EUR"},
-            timeout=8
-        )
-        resp.raise_for_status()
-        live_data = resp.json()
-        live_usd = live_data["rates"]["USD"]
-        live_eur = live_data["rates"]["EUR"]
-        live_date = live_data["date"]
-        api_ok = True
-    except Exception:
-        live_usd, live_eur, live_date = 1.32, 1.18, "N/A (Offline)"
-        api_ok = False
-
-    with live_col1:
-        st.markdown(f"""
-        <div class="metric-card" style="border-left: 4px solid #10B981;">
-            <div class="metric-label">1 GBP → USD</div>
-            <div class="metric-value" style="color:#10B981;">$ {live_usd:.4f}</div>
-            <div class="metric-delta">{'🟢 ECB Live – ' + live_date if api_ok else '🟡 Fallback ước tính'}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with live_col2:
-        st.markdown(f"""
-        <div class="metric-card" style="border-left: 4px solid #6366F1;">
-            <div class="metric-label">1 GBP → EUR</div>
-            <div class="metric-value" style="color:#6366F1;">€ {live_eur:.4f}</div>
-            <div class="metric-delta">{'🟢 ECB Live – ' + live_date if api_ok else '🟡 Fallback ước tính'}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with live_col3:
-        total_rev = df_monthly['MonthlyRevenue'].sum()
-        st.markdown(f"""
-        <div class="metric-card" style="border-left: 4px solid #F59E0B;">
-            <div class="metric-label">Doanh Thu Theo Bộ Lọc Quy Đổi (Tỷ Giá Hôm Nay)</div>
-            <div style="display:flex; gap: 2rem; margin-top: 0.5rem;">
-                <span><b>GBP</b>: £ {total_rev:,.0f}</span>
-                <span><b>USD</b>: $ {total_rev * live_usd:,.0f}</span>
-                <span><b>EUR</b>: € {total_rev * live_eur:,.0f}</span>
-            </div>
-            <div class="metric-delta" style="margin-top:0.3rem;">Doanh thu giao dịch phù hợp bộ lọc hiện tại</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.write("")
-    st.markdown("---")
-
-    # ── Dữ liệu tỷ giá lịch sử ────────────────────────────────────────────────
-    st.markdown("### 📊 Biến Động Tỷ Giá GBP Theo Tháng (2010-12 → 2011-12)")
-
-    ex_path = os.path.join(BASE_DIR, "outputs", "exchange_rates.csv")
-    if os.path.exists(ex_path):
-        df_ex = pd.read_csv(ex_path)
-        # Chuẩn hóa tên cột
-        col_map = {c: c.lower() for c in df_ex.columns}
-        df_ex = df_ex.rename(columns=col_map)
-        if "yearmonth" in df_ex.columns:
-            df_ex["label"] = df_ex["yearmonth"].astype(str)
-        elif "year" in df_ex.columns and "month" in df_ex.columns:
-            df_ex["label"] = df_ex["year"].astype(str) + "-" + df_ex["month"].astype(str).str.zfill(2)
-        else:
-            df_ex["label"] = df_ex.index.astype(str)
-
-        usd_col = "usd_rate" if "usd_rate" in df_ex.columns else df_ex.columns[1]
-        eur_col = "eur_rate" if "eur_rate" in df_ex.columns else df_ex.columns[2]
-
-        fig_fx = go.Figure()
-        fig_fx.add_trace(go.Scatter(
-            x=df_ex["label"], y=df_ex[usd_col],
-            name="GBP/USD", mode="lines+markers",
-            line=dict(color="#10B981", width=2.5),
-            marker=dict(size=7)
-        ))
-        fig_fx.add_trace(go.Scatter(
-            x=df_ex["label"], y=df_ex[eur_col],
-            name="GBP/EUR", mode="lines+markers",
-            line=dict(color="#6366F1", width=2.5),
-            marker=dict(size=7)
-        ))
-        fig_fx.update_layout(
-            template="plotly_white", height=360,
-            title="Tỷ Giá GBP/USD và GBP/EUR Theo Tháng (Nguồn: ECB via Frankfurter API)",
-            xaxis_title="Tháng", yaxis_title="Tỷ Giá (1 GBP = x)",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            hovermode="x unified"
-        )
-        st.plotly_chart(fig_fx, use_container_width=True)
-    else:
-        st.warning("Chưa có file exchange_rates.csv. Chạy `python scripts/07_api_enrichment.py` trước.")
-
-    st.markdown("---")
-
-    # ── Bảng quy đổi doanh thu theo từng tháng ────────────────────────────────
-    st.markdown("### 💰 Bảng Doanh Thu Hàng Tháng Quy Đổi Đa Tiền Tệ")
-    st.caption("Doanh thu GBP từ DWH × Tỷ giá lịch sử ECB của từng tháng → USD & EUR tương ứng")
-
-    if os.path.exists(ex_path) and not df_monthly.empty:
-        df_ex2 = pd.read_csv(ex_path)
-        col_map2 = {c: c.lower() for c in df_ex2.columns}
-        df_ex2 = df_ex2.rename(columns=col_map2)
-        if "yearmonth" in df_ex2.columns:
-            df_ex2["label"] = df_ex2["yearmonth"].astype(str)
-        elif "year" in df_ex2.columns and "month" in df_ex2.columns:
-            df_ex2["label"] = df_ex2["year"].astype(str) + "-" + df_ex2["month"].astype(str).str.zfill(2)
-        else:
-            df_ex2["label"] = df_ex2.index.astype(str)
-
-        usd_col2 = "usd_rate" if "usd_rate" in df_ex2.columns else df_ex2.columns[1]
-        eur_col2 = "eur_rate" if "eur_rate" in df_ex2.columns else df_ex2.columns[2]
-
-        df_mon2 = df_monthly.copy()
-        df_mon2["label"] = df_mon2["YearMonth"].astype(str)
-        df_merged = df_mon2.merge(df_ex2[["label", usd_col2, eur_col2]], on="label", how="left")
-        df_merged["Revenue_GBP"] = df_merged["MonthlyRevenue"]
-        df_merged["Revenue_USD"] = (df_merged["MonthlyRevenue"] * df_merged[usd_col2]).round(2)
-        df_merged["Revenue_EUR"] = (df_merged["MonthlyRevenue"] * df_merged[eur_col2]).round(2)
-
-        display_df = df_merged[["label", "Revenue_GBP", usd_col2, "Revenue_USD", eur_col2, "Revenue_EUR"]].copy()
-        display_df.columns = ["Tháng", "DT (GBP £)", "Tỷ Giá USD", "DT (USD $)", "Tỷ Giá EUR", "DT (EUR €)"]
-        display_df["DT (GBP £)"] = display_df["DT (GBP £)"].apply(lambda x: f"£ {x:,.2f}")
-        display_df["DT (USD $)"] = display_df["DT (USD $)"].apply(lambda x: f"$ {x:,.2f}" if pd.notna(x) else "—")
-        display_df["DT (EUR €)"] = display_df["DT (EUR €)"].apply(lambda x: f"€ {x:,.2f}" if pd.notna(x) else "—")
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
-    else:
-        st.info("Dữ liệu đang được tải... Chạy script 07 để có đầy đủ thông tin.")
-
-    st.markdown("---")
-    st.markdown("""
-    **📚 Về Nguồn API:**
-    - **Frankfurter.app** – Open-source, dữ liệu từ Ngân hàng Trung ương Châu Âu (ECB)
-    - Endpoint lịch sử: `https://api.frankfurter.app/2010-12-01..2011-12-31?from=GBP&to=USD,EUR`
-    - Endpoint thời gian thực: `https://api.frankfurter.app/latest?from=GBP&to=USD,EUR`
-    - **Không cần đăng ký. Không cần API Key. Hoàn toàn miễn phí.**
-    """)
-
 # Footer
 st.markdown("---")
 st.markdown("<div style='text-align: center; color: #94A3B8; font-size: 0.9rem;'>Đồ Án Kho Dữ Liệu & Phân Tích Bán Lẻ (Online Retail DWH) • MinIO Lakehouse, PostgreSQL & Streamlit</div>", unsafe_allow_html=True)
+

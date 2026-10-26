@@ -153,9 +153,9 @@ def main():
              ["docker", "compose", "up", "-d", "minio", "postgres"])
     wait_for_services(timeout=30)
 
-    # Bước 2: Tỷ giá API (ECB / Frankfurter)
+    # Bước 2: Tích hợp API Thương Mại Điện Tử (DummyJSON E-Commerce REST API)
     if not args.skip_etl:
-        run_step("Bước 2: Thu thập tỷ giá ngoại tệ từ ECB API", 
+        run_step("Bước 2: Trích xuất danh mục và đánh giá từ E-Commerce REST API", 
                  [py, "scripts/07_api_enrichment.py"])
 
         # Bước 3: Đường ống Lakehouse ETL

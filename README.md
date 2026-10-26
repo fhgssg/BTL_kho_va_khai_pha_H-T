@@ -238,8 +238,8 @@ Script 06 đưa CSV gốc lên MinIO raw trước, tải bản raw đó để ch
 sau đó ghi dữ liệu sạch vào staging, tạo curated và nạp PostgreSQL. Các file CSV sạch,
 bị loại và báo cáo audit vẫn được lưu cục bộ trong `data\processed` và `outputs`.
 Script 01 có thể chạy độc lập để khảo sát/làm sạch thủ công, nhưng không cần chạy trước
-pipeline chính. Script 07 là tùy chọn nếu cần bổ sung dữ liệu tỷ giá; nó lưu snapshot và
-CSV để script 06 ingest vào Lakehouse.
+pipeline chính. Script 07 là tùy chọn nếu cần trích xuất dữ liệu thương mại điện tử (DummyJSON E-Commerce REST API); nó lưu snapshot và
+CSV để làm giàu dữ liệu (Data Enrichment) cho sản phẩm và phân tích trên Dashboard.
 Chỉ chạy kiểm thử, OLAP, khai phá và dashboard sau khi pipeline Lakehouse hoàn tất.
 
 ### 5. Chạy Dashboard

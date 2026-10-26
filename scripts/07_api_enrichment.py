@@ -1,149 +1,154 @@
 """
-Script 07: API Enrichment – Currency Exchange Rate (Frankfurter API / ECB)
-==========================================================================
-GIAI ĐOẠN 1  – EDA: Kiểm tra & chuẩn hóa dữ liệu tỷ giá từ API
-GIAI ĐOẠN 2  – Xuất snapshot raw và CSV staging cho Lakehouse pipeline
+Script 07: Tích Hợp API Thương Mại Điện Tử (E-Commerce Product Catalog API Enrichment)
+=====================================================================================
+GIAI ĐOẠN 1 – Trích xuất dữ liệu danh mục, sản phẩm, đánh giá từ DummyJSON E-Commerce API
+GIAI ĐOẠN 2 – Làm giàu dữ liệu sản phẩm (Data Enrichment) cho Kho dữ liệu bán lẻ
+GIAI ĐOẠN 3 – Lưu snapshot thô (raw JSON) và bảng đối soát cho Lakehouse & BI Dashboard
 
-scripts/06_lakehouse_minio_postgres_etl.py đưa tỷ giá vào MinIO và PostgreSQL.
-Truy vấn phân tích tỷ giá chạy sau đó qua scripts/04_run_olap_queries.py.
-
-Nguồn API: https://api.frankfurter.app (ECB reference rates – miễn phí, không cần key)
+Nguồn API: https://dummyjson.com/products (RESTful E-Commerce Catalog API – Miễn phí, không cần key)
 """
+
 import os
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import json
 from datetime import datetime
-import requests
+import urllib.request
+import urllib.parse
 import pandas as pd
 
-# ─── CẤU HÌNH ────────────────────────────────────────────────────────────────
-BASE_URL        = "https://api.frankfurter.app"
-BASE_CURRENCY   = "GBP"
-TARGET_CURR     = "USD,EUR"
+BASE_URL = "https://dummyjson.com/products"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RAW_DIR = os.path.join(BASE_DIR, "data", "raw")
+OUTPUTS_DIR = os.path.join(BASE_DIR, "outputs")
+RAW_SNAPSHOT = os.path.join(RAW_DIR, "ecommerce_products_raw.json")
+CATALOG_CSV = os.path.join(OUTPUTS_DIR, "ecommerce_product_catalog.csv")
+BENCHMARK_CSV = os.path.join(OUTPUTS_DIR, "ecommerce_category_benchmarks.csv")
 
-BASE_DIR        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAW_DIR         = os.path.join(BASE_DIR, "data", "raw")
-RAW_SNAPSHOT    = os.path.join(RAW_DIR, "exchange_rates_raw.json")
-OUTPUT_CSV      = os.path.join(BASE_DIR, "outputs", "exchange_rates.csv")
 os.makedirs(RAW_DIR, exist_ok=True)
-os.makedirs(os.path.join(BASE_DIR, "outputs"), exist_ok=True)
+os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
+CATEGORY_MAP_VN = {
+    "beauty": "Làm đẹp & Mỹ phẩm",
+    "fragrances": "Nước hoa & Tinh dầu",
+    "furniture": "Nội thất gia đình",
+    "groceries": "Thực phẩm & Bách hóa",
+    "home-decoration": "Trang trí nhà cửa",
+    "kitchen-accessories": "Dụng cụ nhà bếp & Bàn ăn",
+    "laptops": "Máy tính & Công nghệ",
+    "mens-shirts": "Thời trang nam",
+    "mens-shoes": "Giày dép nam",
+    "mens-watches": "Đồng hồ nam",
+    "mobile-accessories": "Phụ kiện điện thoại",
+    "motorcycle": "Phụ tùng xe máy",
+    "skin-care": "Chăm sóc da",
+    "smartphones": "Điện thoại thông minh",
+    "sports-accessories": "Phụ kiện thể thao",
+    "sunglasses": "Kính mắt thời trang",
+    "tablets": "Máy tính bảng",
+    "tops": "Áo thời trang",
+    "vehicle": "Phương tiện vận tải",
+    "womens-bags": "Túi xách nữ",
+    "womens-dresses": "Váy đầm nữ",
+    "womens-jewellery": "Trang sức nữ",
+    "womens-shoes": "Giày dép nữ",
+    "womens-watches": "Đồng hồ nữ",
+}
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GIAI ĐOẠN 1: EDA & INGESTION – Trích xuất, lưu raw snapshot & kiểm tra dữ liệu API
-# ─────────────────────────────────────────────────────────────────────────────
-def fetch_and_validate() -> pd.DataFrame:
-    print("\n" + "="*60)
-    print("  GĐ 1 – INGESTION & EDA: Trích xuất tỷ giá từ Frankfurter API (ECB)")
-    print("="*60)
+def fetch_ecommerce_api() -> pd.DataFrame:
+    print("\n" + "=" * 65)
+    print("  GIAI ĐOẠN 1: KẾT NỐI & TRÍCH XUẤT DỮ LIỆU TỪ E-COMMERCE API")
+    print("=" * 65)
 
     extracted_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
+    url = f"{BASE_URL}?limit=194"
+    print(f"📡 Đang kết nối tới E-Commerce REST API: {url}...")
+
+    raw_data = None
     is_fallback = False
-    raw_response_data = None
-    records = []
 
     try:
-        url = f"{BASE_URL}/2010-12-01..2011-12-31"
-        resp = requests.get(url, params={"from": BASE_CURRENCY, "to": TARGET_CURR}, timeout=15)
-        resp.raise_for_status()
-        raw_response_data = resp.json()
-        print(f"✅ API trả về {len(raw_response_data.get('rates', {}))} ngày giao dịch.")
-        print(f"   Base currency: {raw_response_data['base']} | Khoảng thời gian: {raw_response_data['start_date']} → {raw_response_data['end_date']}")
-
-        for date_str, rates in raw_response_data["rates"].items():
-            records.append({
-                "RateDate": date_str,
-                "USD_Rate": rates.get("USD"),
-                "EUR_Rate": rates.get("EUR"),
-            })
-        df = pd.DataFrame(records)
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw_data = json.loads(resp.read().decode("utf-8"))
+        products = raw_data.get("products", [])
+        print(f"✅ Kết nối thành công! Đã trích xuất {len(products)} mặt hàng thương mại điện tử.")
     except Exception as e:
         is_fallback = True
-        print(f"⚠️  API không khả dụng: {e}")
-        print("   → Dùng fallback data (tỷ giá ước lượng ECB 2010-2011)")
-        import numpy as np; np.random.seed(42)
-        months = pd.date_range("2010-12", "2011-12", freq="MS")
-        records = []
-        for m in months:
-            records.append({
-                "RateDate": m.strftime("%Y-%m-%d"),
-                "USD_Rate": round(float(np.random.uniform(1.54, 1.67)), 4),
-                "EUR_Rate": round(float(np.random.uniform(1.13, 1.24)), 4),
-            })
-        df = pd.DataFrame(records)
-        raw_response_data = {"rates": {r["RateDate"]: {"USD": r["USD_Rate"], "EUR": r["EUR_Rate"]} for r in records}}
+        print(f"⚠️ Không thể kết nối API trực tiếp ({e}). Sử dụng tập dữ liệu dự phòng chuẩn...")
+        # Tạo fallback data phong phú
+        products = [
+            {"id": 1, "title": "Bình cắm hoa thủy tinh phong cách cổ điển", "category": "home-decoration", "price": 14.99, "rating": 4.65, "stock": 45, "brand": "HomeDecor", "availabilityStatus": "In Stock", "shippingInformation": "Giao hàng từ 2-4 ngày làm việc"},
+            {"id": 2, "title": "Bộ dao thớt đa năng inox 304", "category": "kitchen-accessories", "price": 29.50, "rating": 4.82, "stock": 80, "brand": "KitchenPro", "availabilityStatus": "In Stock", "shippingInformation": "Giao hàng từ 1-2 ngày làm việc"},
+            {"id": 3, "title": "Đèn ngủ hình thỏ con cảm ứng", "category": "home-decoration", "price": 12.00, "rating": 4.70, "stock": 25, "brand": "KidsLight", "availabilityStatus": "Low Stock", "shippingInformation": "Giao hàng từ 3-5 ngày làm việc"},
+            {"id": 4, "title": "Khay bánh kem 3 tầng phong cách hoàng gia", "category": "kitchen-accessories", "price": 25.00, "rating": 4.90, "stock": 60, "brand": "Regency", "availabilityStatus": "In Stock", "shippingInformation": "Giao hàng từ 2-4 ngày làm việc"},
+            {"id": 5, "title": "Túi cói dã ngoại vintage", "category": "womens-bags", "price": 18.20, "rating": 4.45, "stock": 30, "brand": "VintageLife", "availabilityStatus": "In Stock", "shippingInformation": "Giao hàng từ 2-4 ngày làm việc"},
+            {"id": 6, "title": "Hộp thiếc đựng bánh quy quà tặng", "category": "groceries", "price": 8.50, "rating": 4.30, "stock": 100, "brand": "PantrySweet", "availabilityStatus": "In Stock", "shippingInformation": "Giao hàng từ 1-3 ngày làm việc"},
+        ]
+        raw_data = {"products": products, "total": len(products)}
 
-    # Lưu snapshot thô (Raw Data Snapshot) kèm metadata nguồn gốc
-    raw_snapshot = {
+    # Lưu snapshot thô
+    snapshot_payload = {
         "metadata": {
+            "api_name": "DummyJSON E-Commerce Products API",
             "extracted_at": extracted_at,
-            "endpoint": f"{BASE_URL}/2010-12-01..2011-12-31",
-            "base_currency": BASE_CURRENCY,
-            "target_currencies": TARGET_CURR,
-            "status": "FALLBACK" if is_fallback else "SUCCESS",
+            "endpoint": url,
+            "status": "FALLBACK" if is_fallback else "LIVE_API_SUCCESS",
             "is_fallback": is_fallback,
-            "source": "Estimated ECB Benchmark (Offline Fallback)" if is_fallback else "European Central Bank via Frankfurter API",
-            "record_count": len(records)
+            "total_items": len(products)
         },
-        "payload": raw_response_data
+        "payload": raw_data
     }
     with open(RAW_SNAPSHOT, "w", encoding="utf-8") as f:
-        json.dump(raw_snapshot, f, ensure_ascii=False, indent=2)
-    print(f"💾 Đã lưu Raw API Snapshot kèm metadata tại: '{RAW_SNAPSHOT}'")
+        json.dump(snapshot_payload, f, ensure_ascii=False, indent=2)
+    print(f"💾 Đã lưu bản snapshot thô vào: '{RAW_SNAPSHOT}'")
 
-    df["RateDate"] = pd.to_datetime(df["RateDate"])
-    df["Year"]  = df["RateDate"].dt.year
-    df["Month"] = df["RateDate"].dt.month
+    # Chuyển đổi thành DataFrame
+    rows = []
+    for p in products:
+        cat_slug = p.get("category", "other")
+        rows.append({
+            "product_id": p.get("id"),
+            "product_name": p.get("title"),
+            "category_slug": cat_slug,
+            "category_vn": CATEGORY_MAP_VN.get(cat_slug, cat_slug.capitalize()),
+            "price_usd": p.get("price", 0.0),
+            "rating": p.get("rating", 0.0),
+            "stock_quantity": p.get("stock", 0),
+            "brand": p.get("brand", "Generic"),
+            "availability_status": p.get("availabilityStatus", "In Stock"),
+            "shipping_info": p.get("shippingInformation", "Giao trong 2-4 ngày"),
+            "return_policy": p.get("returnPolicy", "Đổi trả trong 30 ngày"),
+            "minimum_order_qty": p.get("minimumOrderQuantity", 1),
+            "extracted_at": extracted_at
+        })
 
-    # Lấy tỷ giá đại diện của mỗi tháng = ngày cuối cùng có dữ liệu
-    df_monthly = (
-        df.sort_values("RateDate")
-          .groupby(["Year", "Month"])
-          .last()
-          .reset_index()
-    )
-    df_monthly["YearMonth"]    = df_monthly["Year"].astype(str) + "-" + df_monthly["Month"].astype(str).str.zfill(2)
-    df_monthly["GBP_Base"]     = 1.0
-    df_monthly["CurrencyKey"]  = range(1, len(df_monthly) + 1)
-    df_monthly["API_Source"]   = "Estimated ECB Benchmark (Fallback)" if is_fallback else "Frankfurter API (ECB Reference Rates)"
-    df_monthly["Is_Fallback"]  = 1 if is_fallback else 0
-    df_monthly["Extracted_At"] = extracted_at
+    df_catalog = pd.DataFrame(rows)
+    df_catalog.to_csv(CATALOG_CSV, index=False, encoding="utf-8")
+    print(f"💾 Đã lưu danh mục sản phẩm E-Commerce vào: '{CATALOG_CSV}' ({len(df_catalog)} dòng)")
 
-    # ── Kiểm tra chất lượng dữ liệu ─────────────────────────────────────────
-    print(f"\n📊 EDA – Kiểm tra chất lượng dữ liệu tỷ giá:")
-    print(f"   Số tháng tỷ giá: {len(df_monthly)}")
-    print(f"   Trạng thái nguồn: {'Dữ liệu dự phòng (FALLBACK)' if is_fallback else 'Dữ liệu thực từ ECB (LIVE)'}")
-    print(f"   Missing USD_Rate: {df_monthly['USD_Rate'].isna().sum()}")
-    print(f"   Missing EUR_Rate: {df_monthly['EUR_Rate'].isna().sum()}")
-    print(f"   USD_Rate  – min: {df_monthly['USD_Rate'].min():.4f}, max: {df_monthly['USD_Rate'].max():.4f}, mean: {df_monthly['USD_Rate'].mean():.4f}")
-    print(f"   EUR_Rate  – min: {df_monthly['EUR_Rate'].min():.4f}, max: {df_monthly['EUR_Rate'].max():.4f}, mean: {df_monthly['EUR_Rate'].mean():.4f}")
-    print(f"\n{df_monthly[['YearMonth', 'USD_Rate', 'EUR_Rate', 'Is_Fallback']].to_string(index=False)}")
-    return df_monthly
+    # ── GIAI ĐOẠN 2: TỔNG HỢP BENCHMARKS THEO NGÀNH HÀNG ───────────────────────
+    print("\n" + "=" * 65)
+    print("  GIAI ĐOẠN 2: TỔNG HỢP CHỈ SỐ NGÀNH HÀNG THƯƠNG MẠI ĐIỆN TỬ")
+    print("=" * 65)
 
+    category_benchmarks = df_catalog.groupby(["category_slug", "category_vn"]).agg(
+        so_san_pham=("product_id", "count"),
+        gia_trung_binh_usd=("price_usd", "mean"),
+        diem_danh_gia_sao=("rating", "mean"),
+        ton_kho_trung_binh=("stock_quantity", "mean"),
+    ).reset_index().round(2)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GIAI ĐOẠN 2: LƯU ĐẦU RA ĐỂ LAKEHOUSE PIPELINE INGEST
-# ─────────────────────────────────────────────────────────────────────────────
-def save_exchange_rates(df: pd.DataFrame):
-    print("\n" + "="*60)
-    print("  GĐ 2 – Lưu dữ liệu tỷ giá để Lakehouse ingest")
-    print("="*60)
-    df.to_csv(OUTPUT_CSV, index=False)
-    print(f"💾 Đã lưu {len(df)} bản ghi tỷ giá → {OUTPUT_CSV}")
-    print("   → Script 06 sẽ nạp CSV qua MinIO staging/curated vào PostgreSQL.")
+    category_benchmarks = category_benchmarks.sort_values(by="so_san_pham", ascending=False)
+    category_benchmarks.to_csv(BENCHMARK_CSV, index=False, encoding="utf-8")
+    print(f"💾 Đã lưu bảng chuẩn hóa ngành hàng vào: '{BENCHMARK_CSV}'")
+    print(category_benchmarks.head(8).to_string(index=False))
 
+    return df_catalog
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("\n" + "★"*60)
-    print("  SCRIPT 07 – API ENRICHMENT (Frankfurter / ECB)")
-    print("  Trích xuất và kiểm tra tỷ giá; bước Lakehouse ETL chạy ở script 06")
-    print("★"*60)
-
-    df_rates = fetch_and_validate()       # GĐ 1
-    save_exchange_rates(df_rates)
-
-    print("\n" + "★"*60)
-    print("  ✅ Tỷ giá sẵn sàng để ingest qua Lakehouse pipeline.")
-    print("★"*60)
+    fetch_ecommerce_api()
