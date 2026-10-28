@@ -29,10 +29,7 @@ Trong kỷ nguyên số, các doanh nghiệp bán lẻ trực tuyến (E-commerc
   - **Giấy phép sử dụng (License)**: Creative Commons Attribution 4.0 International (CC BY 4.0); cần ghi công nguồn theo điều khoản giấy phép.
   - **Thời gian bao phủ**: Từ **01/12/2010** đến **09/12/2011** (1 năm 1 tuần).
   - **Quy mô ban đầu**: `541,909` dòng giao dịch với 8 thuộc tính thô.
-- **Nguồn dữ liệu bổ trợ (Enrichment Source)**: 
-  - **Dữ liệu**: Tỷ giá hối đoái ngoại tệ (GBP sang USD và EUR).
-  - **Nguồn API**: [Frankfurter API](https://api.frankfurter.app) tích hợp từ **Ngân hàng Trung ương Châu Âu (European Central Bank - ECB)**.
-  - **Giấy phép & Truy cập**: Open-source, miễn phí, không yêu cầu API key, cung cấp dữ liệu tham chiếu chính thức hàng ngày.
+- **Nguồn API bổ trợ**: [DummyJSON Products](https://dummyjson.com/products) cung cấp catalog sản phẩm mẫu. Catalog được hợp nhất vào `Dim_Product` cùng hàng Online Retail: nối bản ghi khi có khóa tin cậy, gán danh mục phân tích dùng chung, rồi mới chạy OLAP và dashboard. Đây không phải nguồn hóa đơn; sản phẩm chỉ có trong catalog không được gán doanh thu giả.
 
 ### 1.3. Từ điển dữ liệu nguồn thô (Raw Data Dictionary)
 Bảng thông số kỹ thuật của tập dữ liệu giao dịch thô ban đầu trước khi qua xử lý:
@@ -48,17 +45,12 @@ Bảng thông số kỹ thuật của tập dữ liệu giao dịch thô ban đ�
 | `CustomerID` | Float / Number | **Có (24.93%)** | Mã số nguyên | Mã định danh 5 chữ số của khách hàng đã đăng ký tài khoản. Giá trị NULL đại diện cho khách vãng lai. |
 | `Country` | String / Object | Không | Tên địa danh | Tên quốc gia nơi khách hàng cư trú hoặc đặt hàng vận chuyển đến. |
 
-### 1.4. Quy chuẩn xử lý API Ingestion & Nguyên tắc truy xuất nguồn gốc (Data Lineage)
-Trong thiết kế Kho Dữ Liệu hiện đại, việc gọi API ngoài không nên nạp thẳng một chiều vào Fact/Dim mà phải tuân thủ chuẩn **Auditable Data Lineage**:
-1. **Lưu trữ bản trích xuất thô (Raw Snapshot)**: Toàn bộ phản hồi API dạng JSON được snapshot lưu trữ tại `data/raw/exchange_rates_raw.json` kèm các siêu dữ liệu (metadata):
-   - `extracted_at`: Thời điểm gửi request (ISO 8601 UTC).
-   - `endpoint` & `params`: URL và tham số gọi API (`from=GBP&to=USD,EUR`).
-   - `status` & `record_count`: Trạng thái phản hồi HTTP và số lượng bản ghi nhận được.
-2. **Minh bạch hóa dữ liệu dự phòng (Fallback Provenance)**:
-   - Nếu kết nối internet hoặc API gặp sự cố, hệ thống chuyển sang chế độ dự phòng (Offline Fallback Benchmark).
-   - Để tránh nhầm lẫn giữa dữ liệu ECB thực tế và tỷ giá ước lượng, trường `Is_Fallback` (0: Real Live ECB, 1: Fallback) và `API_Source` được lưu tường minh vào bảng `Dim_Currency` trong DWH.
-3. **Quy trình luân chuyển dữ liệu**:
-   $$\text{Frankfurter API (ECB)} \longrightarrow \text{Raw Snapshot (JSON)} \longrightarrow \text{EDA \& Transform} \longrightarrow \text{Dim\_Currency (DWH)} \longrightarrow \text{OLAP Multi-Currency}$$
+### 1.4. Thu thập và kiểm tra dữ liệu API
+Script `scripts/07_api_enrichment.py` lấy lần lượt tất cả trang từ DummyJSON, kiểm tra số lượng, trường bắt buộc và mã sản phẩm trùng; nếu API hoặc dữ liệu không hợp lệ, script báo lỗi thay vì tạo dữ liệu dự phòng giả.
+- Snapshot JSON có metadata thời điểm, endpoint và số bản ghi, được lưu tại `data/raw/products_raw.json`.
+- CSV đã chuẩn hóa được lưu tại `outputs/products_catalog.csv`; Lakehouse ETL ghi catalog qua MinIO raw/staging rồi hợp nhất vào `Dim_Product`.
+- Các trường đánh giá người dùng chi tiết không được lưu vì không phục vụ bài toán.
+- Hai nguồn không dùng chung `StockCode`, nên số bản ghi khớp khóa tin cậy có thể bằng 0; phân tích vẫn chạy trên chiều hợp nhất nhờ danh mục dùng chung. Nguồn `/products` hiện có 194 sản phẩm, không đủ 1.000 bản ghi để thay nguồn giao dịch.
 
 ### 1.5. Sơ đồ kiến trúc luồng dữ liệu tổng thể (End-to-End Data Lineage Architecture)
 Hệ thống kết nối luồng dữ liệu đa nguồn từ trích xuất đến trình diễn theo sơ đồ dưới đây:
@@ -67,57 +59,58 @@ Hệ thống kết nối luồng dữ liệu đa nguồn từ trích xuất đ�
 flowchart TD
     subgraph SOURCELAYER ["1. DATA SOURCES LAYER (TẦNG NGUỒN DỮ LIỆU)"]
         S1["Tập dữ liệu Online Retail<br/>(UCI: data.csv ~541K dòng)"]
-        S2["Tỷ giá hối đoái ECB Live<br/>(Frankfurter API: GBP->USD/EUR)"]
+        S2["Catalog sản phẩm mẫu<br/>(DummyJSON Products API)"]
     end
 
     subgraph RAWLAYER ["2. RAW STORAGE & INGESTION (TẦNG LƯU TRỮ THÔ)"]
         R1["data/raw/data.csv"]
-        R2["data/raw/exchange_rates_raw.json<br/>(Snapshot kèm Metadata & Is_Fallback)"]
+        R2["data/raw/products_raw.json<br/>(Snapshot đã lọc trường + metadata)"]
     end
 
     subgraph STAGING ["3. STAGING & DATA PROCESSING (LÀM SẠCH & TIỀN XỬ LÝ)"]
         CL["scripts/01_eda_and_cleaning.py<br/>• Loại hóa đơn hủy 'C'<br/>• Lọc Quantity/Price <= 0<br/>• Chuẩn hóa Description<br/>• Gán IsGuestCustomer (-1)"]
         CLEAN_CSV["data/processed/data_cleaned.csv<br/>(524,874 dòng sạch)"]
-        CR["scripts/07_api_enrichment.py<br/>(Chuẩn hóa tỷ giá cuối tháng)"]
+        CR["scripts/07_api_enrichment.py<br/>(Phân trang, kiểm tra & xuất CSV catalog)"]
     end
 
     subgraph LAKEHOUSE ["4. LAKEHOUSE LAYER (MINIO RAW → STAGING → CURATED)"]
         LAKE_RAW["raw/online_retail/data.csv"]
         LAKE_STAGING["staging/online_retail/data_cleaned.parquet"]
-        LAKE_CURATED["curated/online_retail/*.parquet<br/>(Star Schema + Currency)"]
+        LAKE_CURATED["curated/online_retail/*.parquet<br/>(Star Schema hợp nhất)"]
         LAKE_RAW --> LAKE_STAGING --> LAKE_CURATED
+        API_RAW["raw/online_retail/products_raw.json"]
+        API_STAGING["staging/online_retail/products_catalog.parquet"]
+        API_RAW --> API_STAGING --> LAKE_CURATED
     end
     subgraph DWHLAYER ["5. DATA WAREHOUSE LAYER (KHO DỮ LIỆU STAR SCHEMA)"]
         ETL["scripts/06_lakehouse_minio_postgres_etl.py<br/>(DuckDB transform, batch load)"]
         subgraph DWH ["PostgreSQL DWH chính"]
             DD["Dim_Date (374 ngày)"]
             DC["Dim_Customer (4,339 khách)"]
-            DP["Dim_Product (3,921 SKU)"]
+            DP["Dim_Product (hợp nhất Online Retail + DummyJSON)"]
             DL["Dim_Location (38 quốc gia)"]
-            DCUR["Dim_Currency (13 tháng)"]
             FS["Fact_Sales (524,874 dòng)"]
         end
     end
 
     subgraph ANALYTICS ["6. ANALYTICS & DATA MINING (PHÂN TÍCH & KHAI PHÁ)"]
-        OLAP["scripts/04_run_olap_queries.py<br/>• Doanh thu Thời gian / MoM<br/>• Cơ cấu thị trường UK/Global<br/>• Top sản phẩm & Repeat Rate<br/>• Quy đổi đa tiền tệ"]
+        OLAP["scripts/04_run_olap_queries.py<br/>• Doanh thu Thời gian / MoM<br/>• Cơ cấu thị trường UK/Global<br/>• Top sản phẩm & Repeat Rate"]
         MINING["scripts/05_data_mining.py<br/>• RFM Scoring (8 phân khúc)<br/>• K-Means Clustering (k=2)<br/>• Apriori MBA (992 luật bán kèm)"]
-        OUT["outputs/<br/>• rfm_customer_segments.csv<br/>• market_basket_rules.csv<br/>• exchange_rates.csv"]
+        OUT["outputs/<br/>• products_catalog.csv<br/>• rfm_customer_segments.csv<br/>• market_basket_rules.csv"]
     end
 
     subgraph PRESENTATION ["7. PRESENTATION & BI DASHBOARD (TRỰC QUAN HÓA)"]
-        ST["Streamlit BI Dashboard (app.py)<br/>• Tab 1: Xu Hướng & MoM<br/>• Tab 2: Địa Lý & Top SKU<br/>• Tab 3: Khách Hàng RFM & K-Means<br/>• Tab 4: Gợi Ý Bán Chéo (Recommender)<br/>• Tab 5: Kiến Trúc Star Schema<br/>• Tab 6: Quy Đổi Tỷ Giá Đa Tiền Tệ"]
+        ST["Bảng điều khiển Streamlit (app.py)<br/>• Tab 1: Doanh thu và thời gian<br/>• Tab 2: Thị trường, danh mục hợp nhất và sản phẩm<br/>• Tab 3: Phân khúc khách hàng<br/>• Tab 4: Gợi ý mua kèm<br/>• Tab 5: Mô hình kho dữ liệu<br/>• Tab 6: Phân tích sản phẩm hợp nhất"]
         SUP["Apache Superset (Docker BI)"]
     end
 
     S1 --> R1
-    S2 --> R2
+    S2 --> R2 --> CR --> OUT
+    CR --> API_RAW
     R1 --> CL --> CLEAN_CSV
-    R2 --> CR
     CLEAN_CSV --> LAKE_RAW
     LAKE_CURATED --> ETL
-    CR --> ETL
-    ETL --> DD & DC & DP & DL & DCUR & FS
+    ETL --> DD & DC & DP & DL & FS
     FS --> OLAP
     FS --> MINING
     MINING --> OUT
@@ -160,9 +153,8 @@ Tài liệu thiết kế: `database/02_data_modeling.md` | DDL Schema: `database
 3. **Các chiều phân tích (Dimensions)**:
    - `Dim_Date`: Quản lý 374 ngày dương lịch (Ngày, Tháng, Quý, Năm, Ngày trong tuần, Cuối tuần).
    - `Dim_Customer`: 4,339 khách hàng (Khóa đại diện `CustomerKey`, `CustomerID`, phân loại Guest).
-   - `Dim_Product`: 3,921 mặt hàng (`StockCode`, `Description`, `UnitPrice_Standard`).
+   - `Dim_Product`: chiều sản phẩm hợp nhất từ Online Retail và DummyJSON, có danh mục phân tích dùng chung.
    - `Dim_Location`: 38 quốc gia (`Country`, phân loại vùng: `Domestic` UK vs `International`).
-   - `Dim_Currency` *(Mở rộng)*: 13 tháng tỷ giá GBP sang USD và EUR lấy từ **Frankfurter API (European Central Bank - ECB)** để hỗ trợ phân tích tài chính đa tiền tệ.
 4. **Bảng sự kiện (Fact Table)**:
    - `Fact_Sales`: 524,874 bản ghi.
    - Các độ đo (Measures): `Quantity`, `UnitPrice`, `TotalRevenue` (= Quantity * UnitPrice).
@@ -175,16 +167,16 @@ Tài liệu thiết kế: `database/02_data_modeling.md` | DDL Schema: `database
 Script thực hiện: `scripts/06_lakehouse_minio_postgres_etl.py`.
 
 ### 4.1. Quy trình Lakehouse ETL
-- **Raw**: Đưa CSV nguồn và snapshot API lên bucket `raw` của MinIO trước khi xử lý dữ liệu.
+- **Raw**: Đưa CSV giao dịch lên bucket `raw` của MinIO trước khi xử lý. Catalog DummyJSON được đưa lên raw/staging rồi hợp nhất vào chiều sản phẩm curated.
 - **EDA & Cleaning**: Đọc lại CSV raw từ MinIO, chạy `scripts/01_eda_and_cleaning.py`; lưu bản sạch, bản bị loại và audit cục bộ để kiểm tra/đối soát.
 - **Staging**: Chuyển dữ liệu sạch thành Parquet, lưu tại `staging`.
 - **Curated**: Dùng DuckDB đọc lại Parquet staging, tạo các bảng Star Schema dạng Parquet và lưu tại `curated`.
-- **Load**: Đọc lại các object curated từ MinIO rồi nạp theo lô, trong một transaction, vào PostgreSQL DWH.
+- **Load**: Đọc lại các object curated từ MinIO rồi nạp Star Schema hợp nhất vào PostgreSQL DWH. Catalog nằm trong `Dim_Product`; `Fact_Sales` chỉ giữ giao dịch Online Retail.
 - **SQLite**: Giữ `scripts/03_etl_pipeline.py` làm luồng local/dự phòng; không phải nguồn dữ liệu cho các bước chính.
 
 ### 4.2. Kiểm thử tính toàn vẹn (Integrity & Reconciliation)
 - **Ràng buộc khóa ngoại**: **0 lỗi mồ côi** (100% dòng Fact khớp hoàn hảo với 4 bảng Dim).
-- **Kiểm thử và đối soát PostgreSQL**: Bộ kiểm thử tự động hiện có **28/28 đạt**, gồm đối chiếu số dòng, tổng số lượng, doanh thu, khóa ngoại, quy tắc nghiệp vụ, các lát cắt và đối soát doanh thu của ba khối tổng hợp.
+- **Kiểm thử và đối soát PostgreSQL**: Bộ kiểm thử bao phủ đối chiếu số dòng, tổng số lượng, doanh thu, khóa ngoại, quy tắc nghiệp vụ, các lát cắt và ba khối tổng hợp. Khi có catalog DummyJSON, bộ kiểm thử bổ sung 4 phép đối soát số dòng, ProductID duy nhất, trường bắt buộc và miền giá/tồn kho/đánh giá.
   - Doanh thu dữ liệu sạch: **£10,642,110.80**.
   - Doanh thu `Fact_Sales`: **£10,642,110.80** (sai lệch **£0.00** ở độ chính xác 2 chữ số thập phân).
 
@@ -205,7 +197,7 @@ Script thực hiện: `sql/04_olap_queries.sql` và `scripts/04_run_olap_queries
 2. **Cơ cấu thị trường**: Vương quốc Anh chiếm **84.59%** doanh thu. Các thị trường quốc tế đóng góp cao gồm Hà Lan (2.68%), EIRE (2.66%) và Đức (2.15%).
 3. **Khung giờ vàng mua sắm**: Tập trung cao độ từ **10:00 sáng đến 15:00 chiều**, đỉnh cao là **12:00 trưa** (3,220 đơn hàng).
 4. **Tỷ lệ khách hàng quay lại (Repeat Customer Rate)**: Đạt **65.58%** (2,845 / 4,338 khách hàng định danh mua từ 2 lần trở lên).
-5. **Quy đổi đa tiền tệ (Frankfurter API / ECB)**: Áp dụng tỷ giá cuối tháng cho doanh thu từng tháng, tổng doanh thu tương đương khoảng **$17.00M USD** và **€12.24M EUR**. Tỷ giá GBP/USD cao nhất trong giai đoạn là **Tháng 4/2011 (1.6665 USD/GBP)**; mức giảm MoM lớn nhất là **Tháng 9/2011 (-0.0736 USD)**.
+5. **Sản phẩm hợp nhất**: DummyJSON được gộp vào `Dim_Product` với hàng bán lẻ. OLAP tính doanh thu theo danh mục dùng chung; catalog không tạo hóa đơn giả khi chưa khớp khóa tin cậy.
 
 ---
 
@@ -223,9 +215,16 @@ Script thực hiện: `scripts/05_data_mining.py`.
   - **Loyal Customers**: 764 khách hàng, chi tiêu trung bình **£1,827.90/khách**.
   - **At Risk**: 442 khách hàng (nguy cơ rời bỏ).
   - **Hibernating / Lost**: 1,065 khách hàng (ngủ đông / đã rời bỏ).
-- **Phân cụm K-Means**: Tách holdout ngẫu nhiên 80/20 theo khách hàng (seed 42), fit scaler trên train; so sánh K=2..8 của K-Means log-RFM với baseline K-Means RFM chưa log-transform. Cả hai được đánh giá trong cùng không gian log-RFM chuẩn hóa; chọn cấu hình bằng Silhouette train, còn Silhouette holdout chỉ dùng báo cáo. Kết quả chạy hiện tại chọn baseline K-Means RFM thô, K=2 (train **0.5949**, holdout **0.6010**) so với K-Means log-RFM K=2 (train **0.4327**, holdout **0.4331**). Đây là kết quả của metric hình học, không tự khẳng định chất lượng nghiệp vụ; cần diễn giải profile cụm. CSV: `outputs/kmeans_holdout_evaluation.csv`; không dùng nhãn giả hoặc confusion matrix. Mô hình được chọn được fit lại trên toàn bộ khách hàng và kiểm tra độ ổn định qua 5 random seeds.
-- File kết quả: `outputs/rfm_customer_segments.csv`.
-- **Giới hạn diễn giải**: Silhouette và độ ổn định không chứng minh phân khúc làm tăng doanh thu; cần kiểm tra hồ sơ từng cụm và xác nhận với nghiệp vụ trước khi triển khai chiến dịch.
+- **Phân cụm K-Means & Đối chứng Baseline (Tuân thủ Slide 10 & 25 slide hướng dẫn môn học)**:
+  - **Mô hình cơ sở (Baseline Model)**: K-Means trên RFM thô (chưa log-transform, $k=2$). Mặc dù metric hình học Silhouette cao (Train 0.5949, Test 0.6010), mô hình baseline bị nhiễu lệch nghiêm trọng bởi 26 outlier chi tiêu cao, tạo ra sự phân bổ cực đoan: cụm 1 gồm 4,312 khách hàng và cụm 2 chỉ có 26 khách hàng (không có giá trị ứng dụng thực tiễn trong marketing).
+  - **Mô hình đề xuất (Proposed Model - K-Means log1p, $k=4$)**: Dữ liệu RFM được biến đổi $\log(1+x)$ và chuẩn hóa `StandardScaler` (fit trên tập train 80%, đánh giá trên holdout 20%). Mô hình đạt Silhouette Train **0.3359**, Test **0.3368**, độ đồng thuận qua 5 random seeds đạt **97.54%** (vượt ngưỡng ổn định $\ge 90\%$).
+  - **Phân bổ 4 cụm nghiệp vụ định lượng ($k=4$)**:
+    1. **Cluster 1 - Low Value**: 1,622 khách hàng (nhóm khách hàng chi tiêu thấp, mua ít).
+    2. **Cluster 2 - Moderate Value**: 837 khách hàng (nhóm giá trị trung bình ổn định).
+    3. **Cluster 3 - High Value**: 1,166 khách hàng (nhóm mua sắm thường xuyên, giá trị cao).
+    4. **Cluster 4 - Super VIP**: 713 khách hàng (nhóm tinh hoa đóng góp doanh thu lớn nhất).
+  - Chi tiết đối soát holdout lưu tại `outputs/kmeans_holdout_evaluation.csv`; kết quả gán cụm từng khách hàng lưu tại `outputs/rfm_customer_segments.csv`.
+- **Giới hạn diễn giải**: Silhouette và độ ổn định chứng minh chất lượng gom cụm về mặt thuật toán; để tối ưu doanh thu thực tế, phòng kinh doanh cần phối hợp giữa phân khúc RFM quy tắc nghiệp vụ và 4 cụm định lượng này.
 
 ### 6.2. Phân tích Giỏ hàng (Market Basket Analysis - Apriori)
 - **Tập giao dịch**: 18,275 đơn hàng đa sản phẩm, 3,775 sản phẩm sau loại trừ các dòng phí/phi sản phẩm.
@@ -245,11 +244,11 @@ Script thực hiện: `scripts/05_data_mining.py`.
 ### Các tính năng chính trên Dashboard:
 1. **Executive KPI Cards**: Hiển thị doanh thu tổng (**£10.64M**), tổng đơn, AOV (**£533.17**) và số khách định danh (**4,338**).
 2. **Tab 1 - Xu hướng Doanh thu**: Biểu đồ kết hợp Bar-Line thể hiện doanh thu, số đơn và tỷ lệ tăng trưởng MoM theo tháng, phân tích khung giờ vàng.
-3. **Tab 2 - Địa lý & Sản phẩm**: Biểu đồ phân bổ tỷ trọng doanh thu UK vs Quốc tế, Top 10 sản phẩm bán chạy nhất và doanh thu cao nhất.
+3. **Tab 2 - Thị trường và sản phẩm**: Tỷ trọng Vương quốc Anh và quốc tế, doanh thu theo danh mục hợp nhất, top 10 sản phẩm bán chạy và doanh thu cao nhất.
 4. **Tab 3 - Chân dung Khách hàng RFM**: Biểu đồ Treemap doanh thu theo phân khúc RFM, biểu đồ phân tán K-Means và danh sách Top Champions VIP.
 5. **Tab 4 - Gợi ý Bán chéo Tương tác**: Công cụ chọn 1 sản phẩm -> tự động gợi ý các sản phẩm đi kèm (Bundle Recommendations) theo điểm Lift và Confidence.
 6. **Tab 5 - Kiến trúc DWH**: Hiển thị cấu trúc Star Schema, bảng thống kê dữ liệu và mã DDL.
-7. **Tab 6 - Tỷ giá & Phân tích Đa tiền tệ**: Tích hợp Frankfurter API (ECB Live/Historical Rates), biểu đồ tỷ giá GBP/USD và GBP/EUR, bảng quy đổi doanh thu tự động sang USD & EUR.
+7. **Tab 6 - Phân tích sản phẩm hợp nhất**: Đọc `Dim_Product` đã gộp hai nguồn, đối chiếu cơ cấu danh mục catalog với mặt hàng đang bán, rồi lọc danh sách sản phẩm hợp nhất.
 
 ---
 

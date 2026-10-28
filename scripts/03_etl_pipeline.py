@@ -42,6 +42,8 @@ def _setup_logger():
     return logger
 
 log = _setup_logger()
+from product_catalog import build_unified_product_dimension, read_product_catalog
+
 
 def run_etl_pipeline(
     csv_file=None,
@@ -138,13 +140,17 @@ def run_etl_pipeline(
         Description=('Description', lambda x: x.mode().iloc[0] if not x.empty else 'NO DESCRIPTION'),
         UnitPrice_Standard=('UnitPrice', 'mean')
     ).reset_index()
-    
-    dim_product = pd.DataFrame()
-    dim_product['ProductKey'] = range(1, len(product_agg) + 1)
-    dim_product['StockCode'] = product_agg['StockCode'].astype(str)
-    dim_product['Description'] = product_agg['Description'].astype(str).str.slice(0, 255)
-    dim_product['UnitPrice_Standard'] = product_agg['UnitPrice_Standard'].round(2)
-    log.info(f"     + Dim_Product: {len(dim_product):,} sản phẩm")
+    product_catalog = read_product_catalog()
+    dim_product, product_merge_stats = build_unified_product_dimension(
+        product_agg, product_catalog
+    )
+    log.info(
+        f"     + Dim_Product hợp nhất: {len(dim_product):,} sản phẩm "
+        f"(Online Retail: {product_merge_stats['retail_products']:,}; "
+        f"DummyJSON: {product_merge_stats['catalog_products']:,}; "
+        f"khớp khóa tin cậy: {product_merge_stats['matched_products']:,}; "
+        f"có danh mục: {product_merge_stats['categorized_products']:,})"
+    )
 
     # 2.5 Transform: Fact_Sales (Ghép nối Surrogate Keys)
     log.info("  -> Đang chuẩn bị Fact_Sales & ánh xạ khóa đại diện (Surrogate Keys)...")
@@ -152,7 +158,10 @@ def run_etl_pipeline(
     # Tạo map tra cứu nhanh (Dictionary Lookup để tối ưu tốc độ vượt trội)
     location_map = dict(zip(dim_location['Country'], dim_location['LocationKey']))
     customer_map = dict(zip(dim_customer['CustomerID'], dim_customer['CustomerKey']))
-    product_map = dict(zip(dim_product['StockCode'], dim_product['ProductKey']))
+    retail_products = dim_product[dim_product['StockCode'].notna()]
+    product_map = dict(
+        zip(retail_products['StockCode'].astype(str), retail_products['ProductKey'])
+    )
 
     fact_sales = pd.DataFrame()
     fact_sales['InvoiceNo'] = df['InvoiceNo'].astype(str)
@@ -179,7 +188,6 @@ def run_etl_pipeline(
     ]
     fact_sales = fact_sales[fact_cols]
     log.info(f"     + Fact_Sales: {len(fact_sales):,} dòng giao dịch hoàn chỉnh")
-
     # --------------------------------------------------------------------------
     # BƯỚC 3: NẠP DỮ LIỆU VÀO DATABASE (LOAD)
     # --------------------------------------------------------------------------
@@ -224,6 +232,57 @@ def run_etl_pipeline(
     load_duration = time.time() - load_start
     log.info(f"-> Nạp hoàn tất toàn bộ dữ liệu vào cơ sở dữ liệu trong {load_duration:.2f} giây!")
 
+    # --------------------------------------------------------------------------
+    # BƯỚC 3.5: TẠO CÁC KHỐI TỔNG HỢP TRƯỚC (OLAP AGGREGATE VIEWS / CUBES) - SLIDE 9
+    # --------------------------------------------------------------------------
+    log.info("  -> Khởi tạo 3 khối tổng hợp tính trước (OLAP Views) phục vụ phân tích đa chiều...")
+    olap_views_sql = """
+    CREATE VIEW IF NOT EXISTS mv_olap_monthly_sales AS
+    SELECT
+        d.Year AS year,
+        d.Quarter AS quarter,
+        d.Month AS month,
+        d.YearMonth AS yearmonth,
+        COUNT(DISTINCT f.InvoiceNo) AS total_orders,
+        SUM(f.Quantity) AS total_units_sold,
+        ROUND(SUM(f.TotalRevenue), 2) AS revenue_gbp
+    FROM Fact_Sales f
+    JOIN Dim_Date d ON f.DateKey = d.DateKey
+    GROUP BY d.Year, d.Quarter, d.Month, d.YearMonth;
+
+    CREATE VIEW IF NOT EXISTS mv_olap_monthly_country_sales AS
+    SELECT
+        d.Year AS year,
+        d.Quarter AS quarter,
+        d.Month AS month,
+        d.YearMonth AS yearmonth,
+        l.Country AS country,
+        SUM(f.Quantity) AS total_units_sold,
+        ROUND(SUM(f.TotalRevenue), 2) AS revenue_gbp
+    FROM Fact_Sales f
+    JOIN Dim_Date d ON f.DateKey = d.DateKey
+    JOIN Dim_Location l ON f.LocationKey = l.LocationKey
+    GROUP BY d.Year, d.Quarter, d.Month, d.YearMonth, l.Country;
+
+    CREATE VIEW IF NOT EXISTS mv_olap_monthly_product_sales AS
+    SELECT
+        d.Year AS year,
+        d.Quarter AS quarter,
+        d.Month AS month,
+        d.YearMonth AS yearmonth,
+        p.StockCode AS stockcode,
+        p.Description AS description,
+        SUM(f.Quantity) AS total_units_sold,
+        ROUND(SUM(f.TotalRevenue), 2) AS revenue_gbp
+    FROM Fact_Sales f
+    JOIN Dim_Date d ON f.DateKey = d.DateKey
+    JOIN Dim_Product p ON f.ProductKey = p.ProductKey
+    GROUP BY d.Year, d.Quarter, d.Month, d.YearMonth, p.StockCode, p.Description;
+    """
+    conn.executescript(olap_views_sql)
+    conn.commit()
+    log.info("     + Đã tạo thành công: mv_olap_monthly_sales, mv_olap_monthly_country_sales, mv_olap_monthly_product_sales.")
+
     conn.close()
 
     # --------------------------------------------------------------------------
@@ -247,4 +306,3 @@ def run_etl_pipeline(
 
 if __name__ == '__main__':
     run_etl_pipeline()
-

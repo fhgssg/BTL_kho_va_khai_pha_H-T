@@ -10,6 +10,7 @@ Mô tả: Đường ống Lakehouse chính theo kiến trúc hiện đại:
 """
 
 import os
+import sys
 import importlib.util
 import tempfile
 import time
@@ -23,6 +24,9 @@ DATA_RAW_CSV = os.path.join(BASE_DIR, "data", "raw", "data.csv")
 DATA_CLEAN_CSV = os.path.join(BASE_DIR, "data", "processed", "data_cleaned.csv")
 DATA_REJECTED_CSV = os.path.join(BASE_DIR, "data", "processed", "data_rejected.csv")
 CLEANING_AUDIT_CSV = os.path.join(BASE_DIR, "outputs", "data_cleaning_audit.csv")
+PRODUCT_CATALOG_RAW_JSON = os.path.join(BASE_DIR, "data", "raw", "products_raw.json")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from product_catalog import build_unified_product_dimension, read_product_catalog
 
 CFG = {
     "s3_endpoint": "localhost:9000",
@@ -165,21 +169,57 @@ def run_lakehouse_pipeline():
     )
     dim_customer = dim_customer[['CustomerKey', 'CustomerID', 'CustomerCode', 'IsGuestCustomer', 'Country']]
 
-    # Dim_Product
+    # Dim_Product: hợp nhất giao dịch Online Retail với catalog DummyJSON
     product_agg = df_clean.groupby('StockCode').agg(
         Description=('Description', lambda x: x.mode().iloc[0] if not x.empty else 'NO DESCRIPTION'),
         UnitPrice_Standard=('UnitPrice', 'mean')
     ).reset_index()
-    dim_product = pd.DataFrame()
-    dim_product['ProductKey'] = range(1, len(product_agg) + 1)
-    dim_product['StockCode'] = product_agg['StockCode'].astype(str)
-    dim_product['Description'] = product_agg['Description'].astype(str).str.slice(0, 255)
-    dim_product['UnitPrice_Standard'] = product_agg['UnitPrice_Standard'].round(2)
+    product_catalog = read_product_catalog()
+    if product_catalog is not None:
+        raw_catalog_key = "raw/online_retail/products_raw.json"
+        staging_catalog_key = "staging/online_retail/products_catalog.parquet"
+        if os.path.exists(PRODUCT_CATALOG_RAW_JSON):
+            fs.put(PRODUCT_CATALOG_RAW_JSON, raw_catalog_key)
+        with fs.open(staging_catalog_key, "wb") as catalog_file:
+            product_catalog.to_parquet(
+                catalog_file, index=False, engine="pyarrow", compression="snappy"
+            )
+        print(
+            f"     ✅ MinIO staging: '{staging_catalog_key}' "
+            f"({len(product_catalog):,} sản phẩm)"
+        )
+        catalog_staging_tmp = tempfile.NamedTemporaryFile(suffix=".parquet", delete=False)
+        catalog_staging_tmp.close()
+        try:
+            fs.get(staging_catalog_key, catalog_staging_tmp.name)
+            duck = duckdb.connect()
+            try:
+                product_catalog = duck.execute(
+                    "SELECT * FROM read_parquet(?)", [catalog_staging_tmp.name]
+                ).df()
+            finally:
+                duck.close()
+        finally:
+            os.unlink(catalog_staging_tmp.name)
+
+    dim_product, product_merge_stats = build_unified_product_dimension(
+        product_agg, product_catalog
+    )
+    print(
+        "     ✅ Chiều sản phẩm hợp nhất: "
+        f"{product_merge_stats['retail_products']:,} Online Retail + "
+        f"{product_merge_stats['catalog_products']:,} DummyJSON; "
+        f"{product_merge_stats['matched_products']:,} bản ghi khớp khóa tin cậy; "
+        f"{product_merge_stats['categorized_products']:,} sản phẩm có danh mục phân tích."
+    )
 
     # Fact_Sales
     location_map = dict(zip(dim_location['Country'], dim_location['LocationKey']))
     customer_map = dict(zip(dim_customer['CustomerID'], dim_customer['CustomerKey']))
-    product_map = dict(zip(dim_product['StockCode'], dim_product['ProductKey']))
+    retail_products = dim_product[dim_product['StockCode'].notna()]
+    product_map = dict(
+        zip(retail_products['StockCode'].astype(str), retail_products['ProductKey'])
+    )
 
     invoice_dt = pd.to_datetime(df_clean['InvoiceDate'])
     fact_sales = pd.DataFrame()
@@ -195,30 +235,13 @@ def run_lakehouse_pipeline():
     fact_sales['UnitPrice'] = df_clean['UnitPrice'].round(2)
     fact_sales['TotalRevenue'] = (fact_sales['Quantity'] * fact_sales['UnitPrice']).round(2)
 
-    currency_csv = os.path.join(BASE_DIR, "outputs", "exchange_rates.csv")
-    currency_columns = [
-        "CurrencyKey", "Year", "Month", "YearMonth", "RateDate",
-        "GBP_Base", "USD_Rate", "EUR_Rate", "API_Source", "Is_Fallback", "Extracted_At"
-    ]
-    if os.path.exists(currency_csv):
-        df_currency = pd.read_csv(currency_csv)
-        df_currency.columns = df_currency.columns.str.lower()
-        raw_currency = os.path.join(BASE_DIR, "data", "raw", "exchange_rates_raw.json")
-        if os.path.exists(raw_currency):
-            fs.put(raw_currency, "raw/online_retail/exchange_rates_raw.json")
-        with fs.open("staging/online_retail/exchange_rates.parquet", "wb") as f:
-            df_currency.to_parquet(f, index=False, engine="pyarrow", compression="snappy")
-    else:
-        df_currency = pd.DataFrame(columns=[column.lower() for column in currency_columns])
-
     # Đẩy các bảng Curated Parquet lên MinIO
     curated_tables = {
         "dim_date.parquet": dim_date,
         "dim_location.parquet": dim_location,
         "dim_customer.parquet": dim_customer,
         "dim_product.parquet": dim_product,
-        "fact_sales.parquet": fact_sales,
-        "dim_currency.parquet": df_currency
+        "fact_sales.parquet": fact_sales
     }
     for fname, tdf in curated_tables.items():
         tdf.columns = tdf.columns.str.lower()
@@ -271,24 +294,39 @@ def run_lakehouse_pipeline():
 
     CREATE TABLE IF NOT EXISTS dim_product (
         ProductKey          INTEGER PRIMARY KEY,
-        StockCode           VARCHAR(50) NOT NULL UNIQUE,
+        StockCode           VARCHAR(50) UNIQUE,
         Description         VARCHAR(255) NOT NULL,
-        UnitPrice_Standard  DECIMAL(10, 2) DEFAULT 0.00
+        UnitPrice_Standard  DECIMAL(10, 2),
+        SourceSystem        VARCHAR(50) NOT NULL DEFAULT 'Online Retail',
+        APIProductID        INTEGER,
+        CatalogTitle        VARCHAR(255),
+        Category            VARCHAR(100),
+        CategorySource      VARCHAR(40),
+        CatalogPrice        DECIMAL(12, 2),
+        CatalogDiscountPercentage DECIMAL(8, 2),
+        CatalogRating       DECIMAL(4, 2),
+        CatalogStock        INTEGER,
+        Brand               VARCHAR(255),
+        CatalogMatchMethod  VARCHAR(40)
     );
 
-    CREATE TABLE IF NOT EXISTS dim_currency (
-        currencykey INTEGER PRIMARY KEY,
-        year INTEGER NOT NULL,
-        month INTEGER NOT NULL,
-        yearmonth VARCHAR(7) NOT NULL,
-        ratedate DATE NOT NULL,
-        gbp_base DECIMAL(5, 2) NOT NULL DEFAULT 1.00,
-        usd_rate DECIMAL(10, 6),
-        eur_rate DECIMAL(10, 6),
-        api_source VARCHAR(100) NOT NULL,
-        is_fallback INTEGER NOT NULL DEFAULT 0,
-        extracted_at VARCHAR(30)
-    );
+    ALTER TABLE dim_product ALTER COLUMN stockcode DROP NOT NULL;
+    ALTER TABLE dim_product ADD COLUMN IF NOT EXISTS sourcesystem VARCHAR(50);
+    ALTER TABLE dim_product ADD COLUMN IF NOT EXISTS apiproductid INTEGER;
+    ALTER TABLE dim_product ADD COLUMN IF NOT EXISTS catalogtitle VARCHAR(255);
+    ALTER TABLE dim_product ADD COLUMN IF NOT EXISTS category VARCHAR(100);
+    ALTER TABLE dim_product ADD COLUMN IF NOT EXISTS categorysource VARCHAR(40);
+    ALTER TABLE dim_product ADD COLUMN IF NOT EXISTS catalogprice DECIMAL(12, 2);
+    ALTER TABLE dim_product ADD COLUMN IF NOT EXISTS catalogdiscountpercentage DECIMAL(8, 2);
+    ALTER TABLE dim_product ADD COLUMN IF NOT EXISTS catalograting DECIMAL(4, 2);
+    ALTER TABLE dim_product ADD COLUMN IF NOT EXISTS catalogstock INTEGER;
+    ALTER TABLE dim_product ADD COLUMN IF NOT EXISTS brand VARCHAR(255);
+    ALTER TABLE dim_product ADD COLUMN IF NOT EXISTS catalogmatchmethod VARCHAR(40);
+    UPDATE dim_product SET sourcesystem = 'Online Retail' WHERE sourcesystem IS NULL;
+    ALTER TABLE dim_product ALTER COLUMN sourcesystem SET NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_dim_product_api_product_id
+        ON dim_product(apiproductid) WHERE apiproductid IS NOT NULL;
+    DROP TABLE IF EXISTS api_product_catalog;
 
     CREATE TABLE IF NOT EXISTS fact_sales (
         SalesKey            INTEGER PRIMARY KEY,
@@ -309,6 +347,7 @@ def run_lakehouse_pipeline():
     CREATE INDEX IF NOT EXISTS idx_pg_fact_product ON fact_sales(ProductKey);
     CREATE INDEX IF NOT EXISTS idx_pg_fact_location ON fact_sales(LocationKey);
     CREATE INDEX IF NOT EXISTS idx_pg_fact_invoiceno ON fact_sales(InvoiceNo);
+    CREATE INDEX IF NOT EXISTS idx_dim_product_category ON dim_product(category);
     """
     
     # --------------------------------------------------------------------------
@@ -324,18 +363,15 @@ def run_lakehouse_pipeline():
     fact_sales = curated_tables["fact_sales"]
 
     with engine.begin() as con:
+        con.execute(text("DROP TABLE IF EXISTS dim_currency"))
         con.execute(text(pg_ddl))
         con.execute(text(
-            "TRUNCATE TABLE fact_sales, dim_currency, dim_product, dim_customer, dim_location, dim_date"
+            "TRUNCATE TABLE fact_sales, dim_product, dim_customer, dim_location, dim_date"
         ))
         dim_date.to_sql('dim_date', con, if_exists='append', index=False, method='multi', chunksize=1000)
         dim_location.to_sql('dim_location', con, if_exists='append', index=False, method='multi')
         dim_customer.to_sql('dim_customer', con, if_exists='append', index=False, method='multi', chunksize=1000)
         dim_product.to_sql('dim_product', con, if_exists='append', index=False, method='multi', chunksize=1000)
-        curated_tables["dim_currency"].to_sql(
-            'dim_currency', con, if_exists='append', index=False, method='multi'
-        )
-    
         print(f"  -> Đang nạp fact_sales ({len(fact_sales):,} dòng) vào PostgreSQL...")
         fact_sales.to_sql('fact_sales', con, if_exists='append', index=False, chunksize=20000)
 
@@ -360,9 +396,14 @@ def run_lakehouse_pipeline():
         print("\n" + "-" * 55)
         print(f"{'Bảng PostgreSQL':<25} | {'Số bản ghi':>20}")
         print("-" * 55)
-        for tbl in ['dim_date', 'dim_location', 'dim_customer', 'dim_product', 'dim_currency', 'fact_sales']:
+        for tbl in ['dim_date', 'dim_location', 'dim_customer', 'dim_product', 'fact_sales']:
             cnt = con.execute(text(f"SELECT COUNT(*) FROM {tbl}")).fetchone()[0]
             print(f"{tbl:<25} | {cnt:>20,}")
+        product_count_by_source = con.execute(text(
+            "SELECT sourcesystem, COUNT(*) FROM dim_product GROUP BY sourcesystem ORDER BY sourcesystem"
+        )).fetchall()
+        for source_name, source_count in product_count_by_source:
+            print(f"{source_name:<25} | {source_count:>20,}")
 
         # Đối chiếu doanh số
         pg_rev = con.execute(text("SELECT SUM(totalrevenue) FROM fact_sales")).fetchone()[0]

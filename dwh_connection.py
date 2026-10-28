@@ -21,5 +21,16 @@ def default_database_url():
 
 @lru_cache(maxsize=4)
 def get_engine(database_url=None):
-    database_url = database_url or os.getenv("DWH_DATABASE_URL") or default_database_url()
-    return create_engine(database_url, pool_pre_ping=True)
+    if database_url:
+        return create_engine(database_url, pool_pre_ping=True)
+    if os.getenv("DWH_DATABASE_URL"):
+        return create_engine(os.getenv("DWH_DATABASE_URL"), pool_pre_ping=True)
+
+    # Thử kết nối Postgres, nếu Docker chưa bật thì tự động fallback về SQLite
+    try:
+        pg_engine = create_engine(default_database_url(), pool_pre_ping=True)
+        with pg_engine.connect() as conn:
+            pass
+        return pg_engine
+    except Exception:
+        return create_engine(DEFAULT_SQLITE_URL, pool_pre_ping=True)

@@ -19,8 +19,10 @@ Mô hình kho dữ liệu được xây dựng tuân theo phương pháp luận 
 Các chiều phân tích (Dimensions) trả lời cho câu hỏi: *Ai mua? Mua cái gì? Mua khi nào? Giao dịch tại đâu?*
 1. **Dim_Date (Chiều Thời gian)**: Cho phép phân tích theo Ngày, Tháng, Quý, Năm, Ngày trong tuần, Cuối tuần, Khung giờ.
 2. **Dim_Customer (Chiều Khách hàng)**: Quản lý khách hàng thành viên và phân loại khách hàng vãng lai (Guest).
-3. **Dim_Product (Chiều Sản phẩm)**: Danh mục mặt hàng, mã sản phẩm, mô tả sản phẩm và đơn giá niêm yết.
+3. **Dim_Product (Chiều Sản phẩm)**: Chiều hợp nhất từ giao dịch Online Retail và catalog DummyJSON, gồm mã hàng, mô tả, đơn giá bán lẻ, danh mục phân tích dùng chung và thuộc tính catalog.
 4. **Dim_Location (Chiều Địa lý)**: Phân tích theo Quốc gia và vùng miền (Thị trường nội địa Anh vs Thị trường quốc tế).
+
+**Hợp nhất hai nguồn:** DummyJSON Products được nạp vào cùng `Dim_Product` với hàng Online Retail. Bản ghi được nối khi SKU, mã vạch hoặc tên chuẩn hóa khớp tin cậy. Mọi sản phẩm đều có danh mục phân tích dùng chung: catalog giữ danh mục DummyJSON, hàng bán lẻ được gán bằng luật từ khóa. `Fact_Sales` chỉ chứa giao dịch Online Retail; sản phẩm chỉ có trong catalog không được gán hóa đơn giả.
 
 ### Bước 4: Xác định các Độ đo / Sự kiện (Identify the Facts & Measures)
 - **Measures (Độ đo)**:
@@ -66,9 +68,13 @@ erDiagram
 
     Dim_Product {
         INTEGER ProductKey PK "Surrogate Key tự tăng"
-        VARCHAR StockCode UK "Natural Key (mã hàng)"
+        VARCHAR StockCode UK "Mã hàng Online Retail"
         VARCHAR Description "Tên sản phẩm chuẩn hóa"
-        DECIMAL UnitPrice_Standard "Đơn giá tham chiếu"
+        DECIMAL UnitPrice_Standard "Đơn giá bán lẻ tham chiếu"
+        VARCHAR SourceSystem "Nguồn hợp nhất"
+        INTEGER APIProductID UK "Mã DummyJSON"
+        VARCHAR Category "Danh mục phân tích dùng chung"
+        VARCHAR CategorySource "DummyJSON hoặc luật từ khóa"
     }
 
     Dim_Location {
@@ -135,9 +141,13 @@ erDiagram
 | Tên cột | Kiểu dữ liệu | Khóa | Cho phép NULL | Diễn giải |
 | :--- | :--- | :---: | :---: | :--- |
 | `ProductKey` | INTEGER | **PK** | No | Khóa đại diện tự tăng (Surrogate Key). |
-| `StockCode` | VARCHAR(50) | **UK** | No | Mã hàng hóa nghiệp vụ duy nhất (Stock Keeping Unit). |
-| `Description` | VARCHAR(255) | | No | Tên/mô tả sản phẩm đã làm sạch (viết hoa, cắt khoảng trắng). |
-| `UnitPrice_Standard` | DECIMAL(10,2) | | No | Đơn giá tham chiếu (giá trung bình bán ra của sản phẩm). |
+| `StockCode` | VARCHAR(50) | **UK** | Yes | Mã hàng Online Retail; NULL nếu sản phẩm chỉ có trong DummyJSON. |
+| `Description` | VARCHAR(255) | | No | Tên/mô tả sản phẩm đã làm sạch. |
+| `UnitPrice_Standard` | DECIMAL(10,2) | | Yes | Đơn giá bán tham chiếu của Online Retail. |
+| `SourceSystem` | VARCHAR(50) | | No | Nguồn: bán lẻ, DummyJSON, hoặc đã khớp hai nguồn. |
+| `APIProductID` | INTEGER | **UK** | Yes | Mã sản phẩm DummyJSON khi có bản ghi catalog. |
+| `Category` | VARCHAR(100) | | Yes | Danh mục phân tích dùng chung cho hai nguồn. |
+| `CategorySource` | VARCHAR(40) | | Yes | DummyJSON hoặc luật từ khóa bán lẻ. |
 
 ### 4.4. Bảng `Dim_Location`
 | Tên cột | Kiểu dữ liệu | Khóa | Cho phép NULL | Diễn giải |

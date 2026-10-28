@@ -119,6 +119,26 @@ def run_olap_analysis(database_url=None):
         df_q3b = pd.read_sql_query(text(q3b), conn)
     print(df_q3b.to_string(index=False))
 
+    print("\n[BÀI TOÁN 3C] DOANH THU THEO DANH MỤC HỢP NHẤT HAI NGUỒN")
+    print("-" * 80)
+    q3c = """
+    SELECT
+        COALESCE(p.Category, 'Chưa phân loại') AS Category,
+        p.CategorySource,
+        COUNT(DISTINCT p.ProductKey) AS SoldProducts,
+        COUNT(DISTINCT f.InvoiceNo) AS TotalOrders,
+        SUM(f.Quantity) AS TotalQtySold,
+        ROUND(SUM(f.TotalRevenue), 2) AS TotalRevenue,
+        ROUND(SUM(f.TotalRevenue) * 100.0 / SUM(SUM(f.TotalRevenue)) OVER (), 2) AS RevenueSharePct
+    FROM Fact_Sales f
+    JOIN Dim_Product p ON f.ProductKey = p.ProductKey
+    GROUP BY p.Category, p.CategorySource
+    ORDER BY TotalRevenue DESC;
+    """
+    with engine.connect() as conn:
+        df_q3c = pd.read_sql_query(text(q3c), conn)
+    print(df_q3c.to_string(index=False))
+
     # -------------------------------------------------------------------------
     # BÀI TOÁN 4: KHUNG GIỜ VÀNG MUA SẮM
     # -------------------------------------------------------------------------
@@ -220,49 +240,6 @@ def run_olap_analysis(database_url=None):
     with engine.connect() as conn:
         df_q7 = pd.read_sql_query(text(q7), conn)
     print(df_q7.to_string(index=False))
-
-    # -------------------------------------------------------------------------
-    # BÀI TOÁN 8: PHÂN TÍCH ĐA TIỀN TỆ (MULTI-CURRENCY REVENUE - FRANKFURTER API / ECB)
-    # -------------------------------------------------------------------------
-    print("\n\n[BÀI TOÁN 8] DOANH THU QUY ĐỔI ĐA TIỀN TỆ (GBP / USD / EUR) THEO THÁNG")
-    print("-" * 80)
-    q8 = """
-    SELECT
-        d.YearMonth                                          AS YearMonth,
-        COUNT(DISTINCT f.InvoiceNo)                          AS Orders,
-        ROUND(SUM(f.TotalRevenue), 2)                        AS Revenue_GBP,
-        c.USD_Rate                                           AS FX_USD,
-        c.EUR_Rate                                           AS FX_EUR,
-        ROUND(SUM(f.TotalRevenue) * c.USD_Rate, 2)           AS Revenue_USD,
-        ROUND(SUM(f.TotalRevenue) * c.EUR_Rate, 2)           AS Revenue_EUR
-    FROM   Fact_Sales f
-    JOIN   Dim_Date d      ON f.DateKey    = d.DateKey
-    LEFT JOIN Dim_Currency c ON d.Year = c.Year AND d.Month = c.Month
-    GROUP  BY d.YearMonth, c.USD_Rate, c.EUR_Rate
-    ORDER  BY d.YearMonth;
-    """
-    with engine.connect() as conn:
-        df_q8 = pd.read_sql_query(text(q8), conn)
-    print(df_q8.to_string(index=False))
-
-    # -------------------------------------------------------------------------
-    # BÀI TOÁN 9: BIẾN ĐỘNG TỶ GIÁ THÁNG QUA THÁNG (MOM FX DELTA)
-    # -------------------------------------------------------------------------
-    print("\n\n[BÀI TOÁN 9] BIẾN ĐỘNG TỶ GIÁ THEO THÁNG (WINDOW FUNCTION LAG)")
-    print("-" * 80)
-    q9 = """
-    SELECT
-        YearMonth,
-        USD_Rate,
-        ROUND(USD_Rate - LAG(USD_Rate) OVER (ORDER BY Year, Month), 4) AS USD_MoM_Delta,
-        EUR_Rate,
-        ROUND(EUR_Rate - LAG(EUR_Rate) OVER (ORDER BY Year, Month), 4) AS EUR_MoM_Delta
-    FROM Dim_Currency
-    ORDER BY Year, Month;
-    """
-    with engine.connect() as conn:
-        df_q9 = pd.read_sql_query(text(q9), conn)
-    print(df_q9.to_string(index=False))
 
     olap_demos = [
         (

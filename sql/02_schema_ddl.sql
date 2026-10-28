@@ -9,6 +9,7 @@
 -- ------------------------------------------------------------------------------
 -- 1. BẢNG CHIỀU THỜI GIAN (Dim_Date)
 -- ------------------------------------------------------------------------------
+DROP TABLE IF EXISTS Dim_Currency;
 DROP TABLE IF EXISTS Fact_Sales;
 DROP TABLE IF EXISTS Dim_Product;
 DROP TABLE IF EXISTS Dim_Customer;
@@ -55,9 +56,20 @@ CREATE TABLE Dim_Customer (
 -- ------------------------------------------------------------------------------
 CREATE TABLE Dim_Product (
     ProductKey          INTEGER PRIMARY KEY,        -- Surrogate Key tự tăng
-    StockCode           VARCHAR(50) NOT NULL UNIQUE,-- Natural Key mã sản phẩm
+    StockCode           VARCHAR(50) UNIQUE,         -- Mã sản phẩm Online Retail; NULL với dòng chỉ có trong DummyJSON
     Description         VARCHAR(255) NOT NULL,      -- Tên/Mô tả sản phẩm chuẩn hóa
-    UnitPrice_Standard  DECIMAL(10, 2) DEFAULT 0.00 -- Đơn giá tham chiếu trung bình
+    UnitPrice_Standard  DECIMAL(10, 2),             -- Đơn giá bán tham chiếu của Online Retail
+    SourceSystem        VARCHAR(50) NOT NULL,       -- Nguồn dữ liệu sản phẩm
+    APIProductID        INTEGER UNIQUE,             -- ID DummyJSON; NULL nếu không có bản ghi khớp
+    CatalogTitle        VARCHAR(255),               -- Tên sản phẩm từ DummyJSON
+    Category            VARCHAR(100),               -- Danh mục phân tích dùng chung cho hai nguồn
+    CategorySource      VARCHAR(40),                -- DummyJSON hoặc luật từ khóa bán lẻ
+    CatalogPrice        DECIMAL(12, 2),             -- Giá niêm yết từ DummyJSON
+    CatalogDiscountPercentage DECIMAL(8, 2),        -- Mức giảm giá DummyJSON
+    CatalogRating       DECIMAL(4, 2),              -- Điểm đánh giá DummyJSON
+    CatalogStock        INTEGER,                    -- Tồn kho mẫu DummyJSON
+    Brand               VARCHAR(255),               -- Thương hiệu DummyJSON
+    CatalogMatchMethod  VARCHAR(40)                 -- Phương pháp nối bản ghi khi có khóa tin cậy
 );
 
 -- ------------------------------------------------------------------------------
@@ -96,26 +108,5 @@ CREATE INDEX idx_fact_invoiceno ON Fact_Sales(InvoiceNo);
 CREATE INDEX idx_dim_date_year_month ON Dim_Date(Year, Month);
 CREATE INDEX idx_dim_customer_id ON Dim_Customer(CustomerID);
 CREATE INDEX idx_dim_product_stockcode ON Dim_Product(StockCode);
-
--- ------------------------------------------------------------------------------
--- 7. BẢNG CHIỀU TỶ GIÁ TIỀN TỆ (Dim_Currency)  [Mở rộng – Nguồn: Frankfurter API / ECB]
--- Lưu trữ tỷ giá hối đoái GBP theo từng tháng để hỗ trợ phân tích đa tiền tệ.
--- Nguồn dữ liệu: https://api.frankfurter.app (European Central Bank Reference Rates)
--- ------------------------------------------------------------------------------
-DROP TABLE IF EXISTS Dim_Currency;
-
-CREATE TABLE Dim_Currency (
-    CurrencyKey     INTEGER PRIMARY KEY,    -- Surrogate Key tự tăng
-    Year            INTEGER NOT NULL,       -- Năm (ví dụ: 2011)
-    Month           INTEGER NOT NULL,       -- Tháng (1 - 12)
-    YearMonth       VARCHAR(7) NOT NULL,    -- Định dạng YYYY-MM (ví dụ: 2011-03)
-    RateDate        DATE NOT NULL,          -- Ngày giao dịch cuối tháng (ngày thực tế có dữ liệu ECB)
-    GBP_Base        DECIMAL(5,2) NOT NULL DEFAULT 1.00, -- Đồng tiền gốc (luôn = 1)
-    USD_Rate        DECIMAL(10,6),          -- 1 GBP = x USD (tỷ giá ECB)
-    EUR_Rate        DECIMAL(10,6),          -- 1 GBP = x EUR (tỷ giá ECB)
-    API_Source      VARCHAR(100) NOT NULL DEFAULT 'Frankfurter API (ECB Reference Rates)',
-    UNIQUE(Year, Month)
-);
-
-CREATE INDEX idx_currency_yearmonth ON Dim_Currency(YearMonth);
-CREATE INDEX idx_currency_year_month ON Dim_Currency(Year, Month);
+CREATE INDEX idx_dim_product_source ON Dim_Product(SourceSystem);
+CREATE INDEX idx_dim_product_category ON Dim_Product(Category);

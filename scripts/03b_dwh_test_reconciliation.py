@@ -20,7 +20,9 @@ from sqlalchemy import text
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
+sys.path.insert(0, os.path.join(BASE_DIR, "scripts"))
 from dwh_connection import get_engine
+from product_catalog import build_unified_product_dimension, read_product_catalog
 
 CLEAN_CSV = os.path.join(BASE_DIR, "data", "processed", "data_cleaned.csv")
 REPORT_PATH = os.path.join(BASE_DIR, "outputs", "dwh_test_reconciliation_report.csv")
@@ -130,16 +132,112 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
     )
     test_counter += 1
 
-    # 1.5 Dim_Product Row Count
-    src_prod = df_clean['StockCode'].nunique()
+    # 1.5 Unified Dim_Product Row Count
+    src_product_agg = df_clean.groupby('StockCode').agg(
+        Description=('Description', lambda x: x.mode().iloc[0] if not x.empty else 'NO DESCRIPTION'),
+        UnitPrice_Standard=('UnitPrice', 'mean')
+    ).reset_index()
+    catalog_source = read_product_catalog()
+    expected_products, product_merge_stats = build_unified_product_dimension(
+        src_product_agg, catalog_source
+    )
+    src_prod = len(expected_products)
     dwh_prod_rows = cursor.execute("SELECT COUNT(*) FROM Dim_Product").fetchone()[0]
     diff_prod_rows = abs(src_prod - dwh_prod_rows)
     record_test(
-        f"TC{test_counter:02d}", "Row Count", "Khớp số mặt hàng SKU trong Dim_Product",
+        f"TC{test_counter:02d}", "Row Count", "Khớp tổng sản phẩm hợp nhất trong Dim_Product",
         f"{src_prod:,} sản phẩm", f"{dwh_prod_rows:,} sản phẩm", diff_prod_rows, "Diff == 0",
         diff_prod_rows == 0
     )
     test_counter += 1
+
+    # 1.6 Reconcile both sources inside the unified product dimension.
+    if catalog_source is not None:
+        catalog_rows = cursor.execute(
+            "SELECT COUNT(*) FROM Dim_Product WHERE APIProductID IS NOT NULL"
+        ).fetchone()[0]
+        catalog_row_diff = abs(len(catalog_source) - catalog_rows)
+        record_test(
+            f"TC{test_counter:02d}", "Integrated Product",
+            "Khớp số sản phẩm DummyJSON trong chiều sản phẩm hợp nhất",
+            f"{len(catalog_source):,} sản phẩm",
+            f"{catalog_rows:,} sản phẩm",
+            catalog_row_diff, "Diff == 0", catalog_row_diff == 0
+        )
+        test_counter += 1
+
+        duplicate_ids = cursor.execute("""
+            SELECT COUNT(*) FROM (
+                SELECT APIProductID FROM Dim_Product
+                WHERE APIProductID IS NOT NULL
+                GROUP BY APIProductID HAVING COUNT(*) > 1
+            ) AS duplicate_api_product_ids
+        """).fetchone()[0]
+        record_test(
+            f"TC{test_counter:02d}", "Integrated Product",
+            "ID sản phẩm DummyJSON duy nhất trong chiều hợp nhất",
+            "0 mã trùng", f"{duplicate_ids} mã trùng", duplicate_ids,
+            "Duplicates == 0", duplicate_ids == 0
+        )
+        test_counter += 1
+
+        catalog_nulls = cursor.execute("""
+            SELECT COUNT(*) FROM Dim_Product
+            WHERE APIProductID IS NOT NULL
+              AND (CatalogTitle IS NULL OR Category IS NULL OR CatalogPrice IS NULL
+                   OR CatalogStock IS NULL)
+        """).fetchone()[0]
+        record_test(
+            f"TC{test_counter:02d}", "Integrated Product",
+            "Thuộc tính bắt buộc của sản phẩm DummyJSON không bị NULL",
+            "0 sản phẩm lỗi", f"{catalog_nulls} sản phẩm lỗi", catalog_nulls,
+            "Null required fields == 0", catalog_nulls == 0
+        )
+        test_counter += 1
+
+        invalid_catalog_values = cursor.execute("""
+            SELECT COUNT(*) FROM Dim_Product
+            WHERE APIProductID IS NOT NULL
+              AND (CatalogPrice < 0 OR CatalogStock < 0
+                   OR (CatalogRating IS NOT NULL AND (CatalogRating < 0 OR CatalogRating > 5)))
+        """).fetchone()[0]
+        record_test(
+            f"TC{test_counter:02d}", "Integrated Product",
+            "Giá/tồn kho không âm và điểm đánh giá trong khoảng 0–5",
+            "0 sản phẩm lỗi", f"{invalid_catalog_values} sản phẩm lỗi",
+            invalid_catalog_values, "Invalid values == 0",
+            invalid_catalog_values == 0
+        )
+        test_counter += 1
+
+        expected_matches = product_merge_stats["matched_products"]
+        actual_matches = cursor.execute("""
+            SELECT COUNT(*) FROM Dim_Product
+            WHERE SourceSystem = 'Online Retail + DummyJSON'
+              AND APIProductID IS NOT NULL AND StockCode IS NOT NULL
+        """).fetchone()[0]
+        match_diff = abs(expected_matches - actual_matches)
+        record_test(
+            f"TC{test_counter:02d}", "Integrated Product",
+            "Khớp số sản phẩm liên kết bằng khóa tin cậy giữa hai nguồn",
+            f"{expected_matches:,} sản phẩm",
+            f"{actual_matches:,} sản phẩm", match_diff, "Diff == 0",
+            match_diff == 0
+        )
+        test_counter += 1
+
+        missing_category = cursor.execute("""
+            SELECT COUNT(*) FROM Dim_Product
+            WHERE Category IS NULL OR TRIM(Category) = ''
+        """).fetchone()[0]
+        record_test(
+            f"TC{test_counter:02d}", "Integrated Product",
+            "Mọi sản phẩm hợp nhất đều có danh mục phân tích",
+            "0 sản phẩm thiếu danh mục",
+            f"{missing_category} sản phẩm thiếu danh mục",
+            missing_category, "Missing categories == 0", missing_category == 0
+        )
+        test_counter += 1
 
     # --------------------------------------------------------------------------
     # NHÓM 2: ĐỐI CHIẾU ĐỘ ĐO TÀI CHÍNH & SẢN LƯỢNG (MEASURES RECONCILIATION)
@@ -338,7 +436,7 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
     # 6.2 Tính đơn nhất của Natural Keys trong các Dimensions
     dim_dup_queries = [
         ("Dim_Customer", "CustomerID", "SELECT COUNT(*) FROM (SELECT CustomerID FROM Dim_Customer GROUP BY CustomerID HAVING COUNT(*) > 1) AS duplicate_customer_keys"),
-        ("Dim_Product", "StockCode", "SELECT COUNT(*) FROM (SELECT StockCode FROM Dim_Product GROUP BY StockCode HAVING COUNT(*) > 1) AS duplicate_product_keys"),
+        ("Dim_Product", "StockCode", "SELECT COUNT(*) FROM (SELECT StockCode FROM Dim_Product WHERE StockCode IS NOT NULL GROUP BY StockCode HAVING COUNT(*) > 1) AS duplicate_product_keys"),
         ("Dim_Location", "Country", "SELECT COUNT(*) FROM (SELECT Country FROM Dim_Location GROUP BY Country HAVING COUNT(*) > 1) AS duplicate_location_keys"),
         ("Dim_Date", "DateKey", "SELECT COUNT(*) FROM (SELECT DateKey FROM Dim_Date GROUP BY DateKey HAVING COUNT(*) > 1) AS duplicate_date_keys")
     ]

@@ -21,9 +21,10 @@ flowchart TD
 
     subgraph LOCAL["Máy chạy dự án"]
         SOURCE["Chuẩn bị data/raw/data.csv"]
-        FXQ{"Có cập nhật dữ liệu tỷ giá?"}
-        FX["Chạy scripts/07_api_enrichment.py<br/>Lưu snapshot JSON và exchange_rates.csv"]
-        SKIPFX["Bỏ qua enrichment tỷ giá"]
+        FXQ{"Có cập nhật catalog DummyJSON?"}
+        FX["Chạy scripts/07_api_enrichment.py<br/>Lưu snapshot JSON và CSV"]
+        SKIPFX["Bỏ qua cập nhật catalog"]
+        API_OUT["Catalog DummyJSON<br/>Chuẩn bị hợp nhất vào Dim_Product"]
         DOCKER["Khởi động MinIO và PostgreSQL<br/>docker compose up -d"]
         ETL["Chạy scripts/06_lakehouse_minio_postgres_etl.py"]
         RAWCHECK{"Có file CSV nguồn?"}
@@ -44,16 +45,20 @@ flowchart TD
     subgraph MINIO["MinIO Lakehouse"]
         BUCKETS["Kiểm tra / tạo bucket<br/>raw, staging, curated"]
         UPLOAD["Nạp CSV gốc vào<br/>raw/online_retail/data.csv"]
+        API_RAW["Nạp snapshot API<br/>raw/online_retail/products_raw.json"]
+        API_STAGE["Ghi catalog Parquet<br/>staging/online_retail/products_catalog.parquet"]
+        API_CURATED["Catalog staging<br/>đưa vào Dim_Product curated"]
         DOWNLOAD["Tải object raw từ MinIO<br/>vào tệp tạm để xử lý"]
         STAGING["Ghi dữ liệu sạch dạng Parquet<br/>staging/online_retail/data_cleaned.parquet"]
         READSTAGE["Đọc lại Parquet staging bằng DuckDB"]
-        MODEL["Tạo các bảng chiều và fact<br/>Dim_Date, Dim_Location, Dim_Customer,<br/>Dim_Product, Fact_Sales"]
+        MODEL["Tạo các bảng chiều và fact<br/>Dim_Product hợp nhất hai nguồn"]
         CURATED["Ghi các bảng Parquet vào curated"]
         READCURATED["Đọc lại các object curated từ MinIO"]
     end
 
     subgraph POSTGRES["PostgreSQL Data Warehouse"]
         SCHEMA["Tạo Star Schema và khóa ngoại"]
+        API_DWH["Nạp Dim_Product hợp nhất<br/>vào PostgreSQL"]
         REFRESH{"Cho phép thay dữ liệu DWH hiện có?"}
         TRUNCATE["TRUNCATE các bảng đích<br/>và nạp lại dữ liệu curated"]
         DBERR["Không chạy bước nạp<br/>khi chưa xác nhận thay dữ liệu"]
@@ -61,15 +66,16 @@ flowchart TD
     end
 
     subgraph ANALYTICS["Kết quả phân tích"]
-        OLAPOUT["10 đầu ra OLAP<br/>Gồm Top SKU theo số lượng và doanh thu riêng"]
+        OLAPOUT["8 đầu ra OLAP<br/>Gồm Top SKU theo số lượng và doanh thu riêng"]
         MINEOUT["outputs/rfm_customer_segments.csv<br/>outputs/market_basket_rules.csv<br/>và biểu đồ K-Means"]
-        DASHOUT["Dashboard: doanh thu, địa lý/sản phẩm,<br/>RFM/K-Means, bán chéo, Star Schema, tỷ giá"]
+        DASHOUT["Bảng điều khiển: doanh thu, thị trường,<br/>danh mục hợp nhất, RFM, mua kèm, kho dữ liệu"]
     end
 
     START --> SOURCE --> FXQ
-    FXQ -- Có --> FX --> DOCKER
+    FXQ -- Có --> FX --> API_OUT --> DOCKER
     FXQ -- Không --> SKIPFX --> DOCKER
     DOCKER --> BUCKETS --> ETL --> RAWCHECK
+    ETL --> API_RAW --> API_STAGE --> API_CURATED --> API_DWH
     RAWCHECK -- Không --> RAWERR --> END
     RAWCHECK -- Có --> UPLOAD --> DOWNLOAD --> CLEAN
     CLEAN --> VALID
@@ -88,14 +94,15 @@ flowchart TD
 ## Giải thích các hoạt động
 
 1. **Chuẩn bị nguồn và hạ tầng:** dữ liệu giao dịch cần có tại `data/raw/data.csv`.
-   Khởi động MinIO và PostgreSQL bằng Docker Compose. Bước tỷ giá qua API là tùy chọn.
+   Khởi động MinIO và PostgreSQL bằng Docker Compose. Catalog DummyJSON là nguồn bổ trợ; nếu đã tải, ETL hợp nhất catalog vào `Dim_Product` rồi mới phân tích.
 2. **Nạp raw trước khi làm sạch:** ETL đưa CSV gốc vào bucket `raw`, sau đó đọc lại
    object từ MinIO để làm EDA và làm sạch. Các dòng bị loại được giữ kèm lý do; báo cáo
    audit hỗ trợ đối soát.
 3. **Biến đổi qua Lakehouse:** dữ liệu sạch được ghi dạng Parquet vào `staging`.
-   DuckDB đọc lại staging, tạo các bảng chiều và fact, rồi lưu vào `curated`.
-4. **Nạp DWH:** pipeline đọc lại các object curated và nạp chúng vào Star Schema
-   PostgreSQL. **Lưu ý:** ETL hiện `TRUNCATE` các bảng đích trước khi nạp lại; chỉ tiếp tục
+   DuckDB đọc lại staging, tạo các bảng chiều và fact, rồi lưu vào `curated`. Catalog
+   DummyJSON được hợp nhất vào `Dim_Product`; giao dịch vẫn chỉ nằm ở `Fact_Sales`.
+4. **Nạp DWH:** pipeline đọc các object curated, nạp Star Schema vào PostgreSQL
+   gồm chiều sản phẩm hợp nhất. **Lưu ý:** ETL hiện `TRUNCATE` các bảng đích trước khi nạp lại; chỉ tiếp tục
    khi chấp nhận thay thế dữ liệu đang có.
 5. **Kiểm thử trước phân tích:** bộ reconciliation kiểm tra số dòng, số lượng, doanh thu,
    khóa ngoại, giá trị NULL và quy tắc nghiệp vụ. Nếu có kiểm tra `FAIL`, cần dừng và xem
@@ -104,9 +111,9 @@ flowchart TD
    tệp kết quả trong `outputs/`. Dashboard Streamlit đọc dữ liệu DWH và các kết quả khai
    phá đã tính trước.
 
-## Mười đầu ra OLAP
+## Tám đầu ra OLAP
 
-Script có 9 nhãn “BÀI TOÁN”; bài toán 3 gồm hai truy vấn riêng, nên tổng cộng có 10 đầu
+Script có 7 bài toán nghiệp vụ; bài toán 3 gồm hai truy vấn riêng, nên tổng cộng có 8 đầu
 ra phân tích:
 
 1. Doanh thu theo tháng, tăng trưởng MoM và lũy kế YTD.
@@ -117,8 +124,6 @@ ra phân tích:
 6. AOV và quy mô giỏ hàng theo tháng.
 7. Tỷ lệ khách hàng quay lại.
 8. Top khách hàng VIP theo doanh thu.
-9. Doanh thu quy đổi GBP, USD và EUR.
-10. Biến động tỷ giá theo tháng.
 
 ## Lời trình bày ngắn
 
@@ -126,9 +131,10 @@ ra phân tích:
 > lại bản raw này để kiểm tra và làm sạch, đồng thời lưu riêng dữ liệu sạch, dữ liệu bị
 > loại và báo cáo audit. Dữ liệu sạch được chuyển thành Parquet ở staging; từ staging,
 > nhóm xây dựng các bảng chiều và fact ở curated rồi nạp vào PostgreSQL theo mô hình
-> Star Schema. Sau khi đối soát DWH đạt yêu cầu, nhóm chạy 10 đầu ra OLAP, khai phá
+> Star Schema. Sau khi đối soát DWH đạt yêu cầu, nhóm chạy 8 đầu ra OLAP, khai phá
 > khách hàng bằng RFM/K-Means, tìm luật mua kèm bằng Apriori và trình bày kết quả trên
-> dashboard Streamlit.
+> bảng điều khiển Streamlit. Catalog DummyJSON được gộp vào `Dim_Product` rồi phân tích
+> theo danh mục dùng chung; không tạo hóa đơn giả cho sản phẩm chỉ có trong catalog.
 
 ## Lệnh chạy luồng chính
 

@@ -95,7 +95,7 @@
 
   <rect x="170" y="1475" width="520" height="125" class="box analysis"/>
   <text x="430" y="1518" class="label">8a. Phân tích OLAP</text>
-  <text x="430" y="1551" class="detail">10 đầu ra: thời gian, địa lý, SKU, giờ, AOV, khách, tỷ giá</text>
+  <text x="430" y="1551" class="detail">8 đầu ra: thời gian, địa lý, SKU, giờ, AOV, khách</text>
   <text x="430" y="1578" class="small">scripts/04_run_olap_queries.py</text>
 
   <rect x="710" y="1475" width="520" height="125" class="box analysis"/>

@@ -112,6 +112,21 @@ GROUP BY p.StockCode, p.Description
 ORDER BY TotalRevenue DESC
 LIMIT 10;
 
+-- 3C: Doanh thu theo danh mục hợp nhất (giao dịch Online Retail + danh mục chung)
+SELECT
+    COALESCE(p.Category, 'Chưa phân loại') AS Category,
+    p.CategorySource,
+    COUNT(DISTINCT p.ProductKey) AS SoldProducts,
+    COUNT(DISTINCT f.InvoiceNo) AS TotalOrders,
+    SUM(f.Quantity) AS TotalQuantitySold,
+    ROUND(SUM(f.TotalRevenue), 2) AS TotalRevenue,
+    ROUND(SUM(f.TotalRevenue) * 100.0 / SUM(SUM(f.TotalRevenue)) OVER (), 2) AS RevenueSharePct,
+    DENSE_RANK() OVER (ORDER BY SUM(f.TotalRevenue) DESC) AS RevenueRank
+FROM Fact_Sales f
+JOIN Dim_Product p ON f.ProductKey = p.ProductKey
+GROUP BY p.Category, p.CategorySource
+ORDER BY TotalRevenue DESC;
+
 
 -- ==============================================================================
 -- TRUY VẤN 4: PHÂN TÍCH KHUNG GIỜ VÀNG MUA SẮM (PEAK SHOPPING HOURS)
@@ -250,57 +265,4 @@ JOIN Dim_Date d ON f.DateKey = d.DateKey
 GROUP BY d.Year
 
 ORDER BY ReportYear, ReportQuarter, ReportMonth;
-
--- ==============================================================================
--- TRUY VẤN 7: PHÂN TÍCH ĐA TIỀN TỆ (MULTI-CURRENCY REVENUE ANALYSIS)
--- [Mở rộng – Nguồn: Frankfurter API / ECB qua Dim_Currency]
--- Nghiệp vụ: Quy đổi doanh thu GBP sang USD & EUR theo tỷ giá ECB thực tế
---            từng tháng để hỗ trợ báo cáo quốc tế.
--- Kỹ thuật SQL: JOIN với Dim_Currency, tính toán quy đổi trực tiếp trong SQL.
--- ==============================================================================
-SELECT
-    d.YearMonth                                          AS Thang,
-    COUNT(DISTINCT f.InvoiceNo)                          AS SoDon,
-    ROUND(SUM(f.TotalRevenue), 2)                        AS DoanhThu_GBP,
-    c.USD_Rate                                           AS TyGia_USD,
-    c.EUR_Rate                                           AS TyGia_EUR,
-    ROUND(SUM(f.TotalRevenue) * c.USD_Rate, 2)           AS DoanhThu_USD,
-    ROUND(SUM(f.TotalRevenue) * c.EUR_Rate, 2)           AS DoanhThu_EUR
-FROM   Fact_Sales f
-JOIN   Dim_Date d      ON f.DateKey    = d.DateKey
-LEFT JOIN Dim_Currency c ON d.Year = c.Year AND d.Month = c.Month
-GROUP  BY d.YearMonth, c.USD_Rate, c.EUR_Rate
-ORDER  BY d.YearMonth;
-
--- ==============================================================================
--- TRUY VẤN 8: TỔNG DOANH THU THEO NĂM QUY ĐỔI ĐA TIỀN TỆ
--- Kỹ thuật: GROUP BY + AVG tỷ giá trung bình cả năm
--- ==============================================================================
-SELECT
-    d.Year                                               AS Nam,
-    ROUND(SUM(f.TotalRevenue), 2)                        AS TongDT_GBP,
-    ROUND(AVG(c.USD_Rate), 4)                            AS TyGia_USD_TB,
-    ROUND(SUM(f.TotalRevenue) * AVG(c.USD_Rate), 2)      AS TongDT_USD,
-    ROUND(AVG(c.EUR_Rate), 4)                            AS TyGia_EUR_TB,
-    ROUND(SUM(f.TotalRevenue) * AVG(c.EUR_Rate), 2)      AS TongDT_EUR
-FROM   Fact_Sales f
-JOIN   Dim_Date d      ON f.DateKey = d.DateKey
-LEFT JOIN Dim_Currency c ON d.Year = c.Year AND d.Month = c.Month
-GROUP  BY d.Year
-ORDER  BY d.Year;
-
--- ==============================================================================
--- TRUY VẤN 9: BIẾN ĐỘNG TỶ GIÁ THÁNG QUA THÁNG (MoM FX DELTA)
--- Kỹ thuật: Window Function LAG() để tính mức thay đổi tỷ giá
--- ==============================================================================
-SELECT
-    YearMonth,
-    USD_Rate,
-    LAG(USD_Rate) OVER (ORDER BY Year, Month)                        AS USD_Rate_ThangTruoc,
-    ROUND(USD_Rate - LAG(USD_Rate) OVER (ORDER BY Year, Month), 6)   AS USD_MoM_Delta,
-    EUR_Rate,
-    LAG(EUR_Rate) OVER (ORDER BY Year, Month)                        AS EUR_Rate_ThangTruoc,
-    ROUND(EUR_Rate - LAG(EUR_Rate) OVER (ORDER BY Year, Month), 6)   AS EUR_MoM_Delta
-FROM Dim_Currency
-ORDER BY Year, Month;
 

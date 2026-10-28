@@ -33,10 +33,12 @@ E:\ổ D\Kho\B\
 │
 ├── docker-compose.yml          # Hạ tầng Container: MinIO + PostgreSQL + Apache Superset
 ├── requirements.txt            # Danh sách thư viện Python cần thiết
+├── run_all.bat                 # Một lệnh dựng môi trường, chạy pipeline và mở dashboard
+├── run_all.ps1                 # Script điều phối cho Windows PowerShell
 │
 ├── data/                       # Dữ liệu phục vụ hệ thống
 │   ├── raw/data.csv            # Dữ liệu giao dịch thô ban đầu
-│   ├── raw/exchange_rates_raw.json  # Snapshot phản hồi API tỷ giá
+│   ├── raw/products_raw.json   # Snapshot catalog đã chọn trường từ DummyJSON
 │   └── processed/              # Dữ liệu sạch và dữ liệu bị loại kèm lý do
 │
 ├── database/                   # Kho dữ liệu & Tài liệu thiết kế
@@ -50,14 +52,17 @@ E:\ổ D\Kho\B\
 │   ├── 04_run_olap_queries.py  # Giai đoạn 4: Thực thi 8 truy vấn phân tích OLAP
 │   ├── 05_data_mining.py       # Giai đoạn 5: RFM, K-Means & Market Basket
 │   ├── 03b_dwh_test_reconciliation.py # Kiểm thử và đối soát kho
-│   └── 06_lakehouse_minio_postgres_etl.py  # ETL chính: MinIO Lakehouse -> PostgreSQL
+│   ├── 06_lakehouse_minio_postgres_etl.py  # ETL chính: MinIO Lakehouse -> PostgreSQL
+│   ├── 07_api_enrichment.py    # Tải catalog DummyJSON
+│   └── product_catalog.py      # Kiểm tra/chuẩn hóa catalog cho ETL
 │
 ├── sql/                        # Kịch bản SQL phân tích
 │   ├── 02_schema_ddl.sql       # DDL tạo Schema
 │   ├── 04_olap_queries.sql     # Các truy vấn OLAP & SQL nâng cao
 │   └── 05_olap_aggregate_cubes.sql # Các khối tổng hợp vật lý cho PostgreSQL
 │
-├── outputs/                    # Kết quả khai phá, dữ liệu tỷ giá và báo cáo audit/test
+├── outputs/                    # Kết quả khai phá, catalog sản phẩm và báo cáo audit/test
+│   ├── products_catalog.csv    # Catalog DummyJSON, hợp nhất vào Dim_Product
 │   ├── rfm_customer_segments.csv   # Kết quả phân khúc khách hàng RFM & K-Means
 │   └── market_basket_rules.csv     # 992 luật kết hợp gợi ý bán chéo (Apriori)
 │
@@ -86,6 +91,42 @@ E:\ổ D\Kho\B\
 ---
 
 ## 🛠️ HƯỚNG DẪN KHỞI CHẠY HỆ THỐNG
+
+### Chạy toàn bộ dự án bằng một lệnh (Windows)
+
+Điều kiện trước khi chạy: cài Python 3.10 trở lên, Docker Desktop đang mở, và đặt
+file nguồn `data.csv` tại `data\raw\data.csv`. Từ thư mục gốc dự án chạy:
+
+```powershell
+.\run_all.bat
+```
+
+Lần đầu, script tự tạo `.venv` và cài các thư viện trong `requirements.txt`. Sau đó
+nó khởi động MinIO, PostgreSQL và Superset bằng Docker Compose; tải catalog DummyJSON,
+ETL MinIO → PostgreSQL, kiểm thử DWH, truy vấn OLAP và khai phá dữ liệu; cuối cùng
+khởi chạy Streamlit tại `http://localhost:8501`. Nếu `requirements.txt` thay đổi,
+script tự cài/cập nhật lại thư viện. Superset sẽ được phục vụ tại `http://localhost:8088`.
+
+Script dừng khi bước hạ tầng, ETL, đối soát hoặc phân tích quan trọng thất bại. Nếu API
+catalog gặp lỗi, script báo cảnh báo và vẫn tiếp tục pipeline giao dịch.
+ETL nạp lại các bảng DWH (TRUNCATE rồi load), nhưng không xóa Docker volumes. Không
+chạy lệnh này khi cần giữ dữ liệu DWH hiện tại chưa được sao lưu.
+
+Tuỳ chọn:
+
+```powershell
+.\run_all.bat -ValidateOnly   # Kiểm tra dữ liệu, Docker, Python và thư viện; không chạy ETL
+.\run_all.bat -SkipSuperset   # Chỉ khởi động MinIO/PostgreSQL, không khởi động Superset
+.\run_all.bat -SkipDashboard  # Không khởi chạy Streamlit sau khi phân tích xong
+.\run_all.bat -SkipProductCatalog # Không gọi API; vẫn nạp catalog đã lưu trước đó nếu có
+```
+
+`-ValidateOnly` có thể tạo `.venv` và cài thư viện lần đầu, nhưng không thay đổi dữ liệu
+trong PostgreSQL hay khởi động container.
+
+### Chạy thủ công từng bước
+
+Nếu muốn tự kiểm soát từng công đoạn, có thể chạy các lệnh phía dưới thay vì script một lệnh.
 
 1. **Khởi động hạ tầng Lakehouse**:
    ```bash
@@ -212,8 +253,12 @@ Script 06 đưa CSV gốc lên MinIO raw trước, tải bản raw đó để ch
 sau đó ghi dữ liệu sạch vào staging, tạo curated và nạp PostgreSQL. Các file CSV sạch,
 bị loại và báo cáo audit vẫn được lưu cục bộ trong `data\processed` và `outputs`.
 Script 01 có thể chạy độc lập để khảo sát/làm sạch thủ công, nhưng không cần chạy trước
-pipeline chính. Script 07 là tùy chọn nếu cần bổ sung dữ liệu tỷ giá; nó lưu snapshot và
-CSV để script 06 ingest vào Lakehouse.
+pipeline chính. Script 07 tải catalog sản phẩm từ DummyJSON và lưu snapshot JSON cùng CSV chuẩn hóa.
+Nếu CSV đã có, script 06 đưa catalog qua MinIO raw/staging rồi hợp nhất vào `Dim_Product`
+cùng hàng Online Retail. Bản ghi được nối khi có khóa tin cậy; mọi sản phẩm đều có danh mục
+phân tích dùng chung. Catalog không thay nguồn giao dịch và không đủ 1.000 bản ghi để thay
+`data.csv`. Khi không có mạng, script tổng sẽ báo cảnh báo và vẫn tiếp tục ETL giao dịch (dùng bản
+catalog cũ nếu có). Khi không cần gọi API, thêm `-SkipProductCatalog` khi chạy `run_all.bat`.
 Chỉ chạy kiểm thử, OLAP, khai phá và dashboard sau khi pipeline Lakehouse hoàn tất.
 
 ### 5. Chạy Dashboard

@@ -119,7 +119,7 @@
   - Tab 3: Khám phá phân khúc khách hàng RFM & gom cụm K-Means.
   - Tab 4: Công cụ gợi ý sản phẩm bán kèm tương tác (Cross-sell Recommender).
   - Tab 5: Kiến trúc Kho dữ liệu Star Schema & DDL.
-  - Tab 6: Phân tích Đa tiền tệ & Tỷ giá hối đoái (Frankfurter API / ECB Live Rates).
+  - Tab 6: Phân tích sản phẩm sau khi gộp Online Retail và DummyJSON.
 - [x] **Bước 6.3**: Viết báo cáo tổng kết đồ án chi tiết (`BAO_CAO_DO_AN.md`).
 
 *Thời gian dự kiến*: 2 - 3 ngày | *Đầu ra*: Ứng dụng Dashboard `app.py` & Báo cáo đồ án `BAO_CAO_DO_AN.md`.
@@ -136,4 +136,4 @@
 | **Giai đoạn 4** | Truy vấn OLAP & Phân tích SQL | `sql/04_olap_queries.sql`, `scripts/04_run_olap_queries.py` | ✅ Hoàn thành |
 | **Giai đoạn 5** | RFM Segmentation & Market Basket | `scripts/05_data_mining.py`, `outputs/` | ✅ Hoàn thành |
 | **Giai đoạn 6** | Dashboard Web & Báo cáo hoàn chỉnh | `app.py` (6 tabs), `BAO_CAO_DO_AN.md` | ✅ Hoàn thành (100%) |
-| **Tích hợp dữ liệu bổ sung** | **API Enrichment – Frankfurter (ECB)** | `scripts/07_api_enrichment.py`, `outputs/exchange_rates.csv`, `curated/dim_currency.parquet`, PostgreSQL `dim_currency` | ✅ **Đầy đủ (EDA + ETL + OLAP + Dashboard)** |
+| **Tích hợp dữ liệu API bổ trợ** | **DummyJSON Products Catalog** | `scripts/07_api_enrichment.py`, MinIO raw/staging, hợp nhất vào `Dim_Product`, OLAP danh mục và tab phân tích hợp nhất trong `app.py` | ✅ **Gộp vào chiều sản phẩm, rồi phân tích; không tạo hóa đơn giả cho catalog** |
