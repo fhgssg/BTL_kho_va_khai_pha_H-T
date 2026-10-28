@@ -137,6 +137,41 @@ button[data-baseweb="tab"]:nth-child(4) p::before {
     vertical-align: -2px;
     color: #1E293B;
 }
+button[data-baseweb="tab"]:nth-child(5) p::before {
+    font-family: 'boxicons' !important;
+    content: "\\ea87";
+    font-size: 1.2rem;
+    margin-right: 8px;
+    vertical-align: -2px;
+    color: #1E293B;
+}
+.olap-op-card {
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-left: 4px solid #2563EB;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+}
+.olap-op-title {
+    font-size: 0.88rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #1E40AF;
+    margin-bottom: 0.3rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.olap-op-title i {
+    font-size: 1.2rem;
+    color: #1E40AF !important;
+}
+.olap-op-desc {
+    font-size: 0.88rem;
+    color: #475569;
+}
 div[data-testid="stSidebar"] [data-testid="stMultiSelect"]:nth-of-type(1) label p::before {
     font-family: 'boxicons' !important;
     content: "\\ea15";
@@ -217,6 +252,14 @@ DANH_SACH_TIEU_BANG = {
     "AC": "Acre",
     "AP": "Amapá",
     "RR": "Roraima"
+}
+
+DANH_SACH_VUNG = {
+    "Southeast": "Đông Nam",
+    "South": "Nam",
+    "Northeast": "Đông Bắc",
+    "Midwest": "Trung Tây",
+    "North": "Bắc",
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -592,8 +635,164 @@ def load_rfm():
         return pd.read_csv(RFM_PATH)
     return pd.DataFrame()
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CÁC HÀM TẢI DỮ LIỆU OLAP ĐA CHIỀU
+# ──────────────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def olap_rollup(level: str):
+    """Roll-up: Gộp dữ liệu từ Tháng lên Quý hoặc Năm."""
+    engine = get_engine()
+    if level == "Năm":
+        q = """
+        SELECT d.year AS _sort_year,
+               d.year::text AS nam,
+               COUNT(DISTINCT f.orderid) AS so_don_hang,
+               COUNT(*) AS tong_san_luong,
+               ROUND(SUM(f.totalrevenue)::numeric, 2) AS tong_doanh_thu
+        FROM fact_sales f JOIN dim_date d ON f.datekey = d.datekey
+        GROUP BY d.year ORDER BY d.year
+        """
+    elif level == "Quý":
+        q = """
+        SELECT d.year AS _sort_year,
+               MIN(d.month) AS _sort_month,
+               d.year::text AS nam,
+               d.quartername AS quy,
+               COUNT(DISTINCT f.orderid) AS so_don_hang,
+               COUNT(*) AS tong_san_luong,
+               ROUND(SUM(f.totalrevenue)::numeric, 2) AS tong_doanh_thu
+        FROM fact_sales f JOIN dim_date d ON f.datekey = d.datekey
+        GROUP BY d.year, d.quartername ORDER BY d.year, MIN(d.month)
+        """
+    else:  # Tháng
+        q = """
+        SELECT d.year AS _sort_year,
+               d.month AS _sort_month,
+               d.yearmonth AS thang_nam,
+               COUNT(DISTINCT f.orderid) AS so_don_hang,
+               COUNT(*) AS tong_san_luong,
+               ROUND(SUM(f.totalrevenue)::numeric, 2) AS tong_doanh_thu
+        FROM fact_sales f JOIN dim_date d ON f.datekey = d.datekey
+        GROUP BY d.yearmonth, d.year, d.month ORDER BY d.year, d.month
+        """
+    with engine.connect() as conn:
+        return pd.read_sql_query(text(q), conn)
+
+
+@st.cache_data(ttl=3600)
+def olap_drilldown(year: int):
+    """Drill-down: Từ tổng năm → chi tiết từng tháng trong năm đó."""
+    engine = get_engine()
+    q = """
+    SELECT d.yearmonth AS thang_nam,
+           d.month AS thang,
+           d.quartername AS quy,
+           COUNT(DISTINCT f.orderid) AS so_don_hang,
+           ROUND(SUM(f.totalrevenue)::numeric, 2) AS doanh_thu,
+           ROUND(AVG(f.totalpaymentvalue)::numeric, 2) AS gia_tri_don_tb
+    FROM fact_sales f JOIN dim_date d ON f.datekey = d.datekey
+    WHERE d.year = :yr
+    GROUP BY d.yearmonth, d.month, d.quartername
+    ORDER BY d.month
+    """
+    with engine.connect() as conn:
+        return pd.read_sql_query(text(q), conn, params={"yr": year})
+
+
+@st.cache_data(ttl=3600)
+def olap_slice(year: int):
+    """Slice: Cắt một mặt phẳng dữ liệu — doanh thu tháng theo từng vùng (năm đã chọn)."""
+    engine = get_engine()
+    q = """
+    SELECT d.year AS _sort_year,
+           d.month AS _sort_month,
+           d.yearmonth AS thang_nam,
+           l.region AS vung,
+           COUNT(DISTINCT f.orderid) AS so_don_hang,
+           ROUND(SUM(f.totalrevenue)::numeric, 2) AS doanh_thu
+    FROM fact_sales f
+    JOIN dim_date d     ON f.datekey = d.datekey
+    JOIN dim_location l ON f.locationkey = l.locationkey
+    WHERE d.year = :yr
+    GROUP BY d.yearmonth, d.year, d.month, l.region
+    ORDER BY d.year, d.month, l.region
+    """
+    with engine.connect() as conn:
+        return pd.read_sql_query(text(q), conn, params={"yr": year})
+
+
+@st.cache_data(ttl=3600)
+def olap_dice(states: tuple, year: int):
+    """Dice: Cắt khối đa chiều — lọc theo vùng (bang) VÀ năm cụ thể."""
+    engine = get_engine()
+    if not states:
+        return pd.DataFrame()
+    placeholders = ", ".join([f":s{i}" for i in range(len(states))])
+    params = {f"s{i}": s for i, s in enumerate(states)}
+    params["yr"] = year
+    q = f"""
+    SELECT d.year AS _sort_year,
+           d.month AS _sort_month,
+           d.yearmonth AS thang_nam,
+           l.customerstate AS tieu_bang,
+           l.region AS vung,
+           COUNT(DISTINCT f.orderid) AS so_don_hang,
+           ROUND(SUM(f.totalrevenue)::numeric, 2) AS doanh_thu,
+           ROUND(AVG(f.price)::numeric, 2) AS gia_tb
+    FROM fact_sales f
+    JOIN dim_date d     ON f.datekey = d.datekey
+    JOIN dim_location l ON f.locationkey = l.locationkey
+    WHERE l.customerstate IN ({placeholders}) AND d.year = :yr
+    GROUP BY d.yearmonth, d.year, d.month, l.customerstate, l.region
+    ORDER BY d.year, d.month, l.customerstate
+    """
+    with engine.connect() as conn:
+        return pd.read_sql_query(text(q), conn, params=params)
+
+
+@st.cache_data(ttl=3600)
+def olap_pivot(states: tuple, year: int = None):
+    """Pivot: Xoay ma trận — các bang thành cột, tháng thành hàng."""
+    engine = get_engine()
+    if not states:
+        return pd.DataFrame()
+    placeholders = ", ".join([f":s{i}" for i in range(len(states))])
+    params = {f"s{i}": s for i, s in enumerate(states)}
+    year_filter = ""
+    if year:
+        year_filter = "AND d.year = :yr"
+        params["yr"] = year
+    q = f"""
+    SELECT d.yearmonth AS thang_nam,
+           d.year, d.month,
+           l.customerstate AS tieu_bang,
+           ROUND(SUM(f.totalrevenue)::numeric, 2) AS doanh_thu
+    FROM fact_sales f
+    JOIN dim_date d     ON f.datekey = d.datekey
+    JOIN dim_location l ON f.locationkey = l.locationkey
+    WHERE l.customerstate IN ({placeholders}) {year_filter}
+    GROUP BY d.yearmonth, d.year, d.month, l.customerstate
+    ORDER BY d.year, d.month
+    """
+    with engine.connect() as conn:
+        df_raw = pd.read_sql_query(text(q), conn, params=params)
+    if df_raw.empty:
+        return pd.DataFrame()
+    df_pivot = df_raw.pivot_table(
+        index="thang_nam", columns="tieu_bang", values="doanh_thu", aggfunc="sum", fill_value=0
+    ).reset_index()
+    # Khôi phục thứ tự thời gian sau pivot (pivot_table sort theo index alphabetically)
+    order_df = df_raw[["thang_nam", "year", "month"]].drop_duplicates().sort_values(["year", "month"])
+    ordered_months = order_df["thang_nam"].tolist()
+    df_pivot = df_pivot.set_index("thang_nam").reindex(ordered_months).reset_index()
+    df_pivot.columns.name = None
+    return df_pivot
+
+
 @st.cache_data(ttl=600)
 def load_rules():
+
     if os.path.exists(RULES_PATH):
         df = pd.read_csv(RULES_PATH)
         for c in ["support", "confidence", "lift"]:
@@ -723,11 +922,12 @@ else:
 # ──────────────────────────────────────────────────────────────────────────────
 # 7. CÁC PHÂN HỆ HIỂN THỊ (4 TABS - BOXICONS ĐEN TRẮNG)
 # ──────────────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Chỉ Số Tổng Quan",
     "Phân Tích Địa Lý & Danh Mục",
     "Phân Khúc Khách Hàng",
-    "Gợi Ý Bán Chéo Sản Phẩm"
+    "Gợi Ý Bán Chéo Sản Phẩm",
+    "Phân Tích OLAP Đa Chiều",
 ])
 
 
@@ -1069,3 +1269,513 @@ with tab4:
                 )
             else:
                 st.info("Không tìm thấy quy luật gợi ý bán kèm nào phù hợp với ngành hàng này.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PHẦN 5: PHÂN TÍCH TRỰC TUYẾN ĐA CHIỀU (OLAP OPERATIONS)
+# ══════════════════════════════════════════════════════════════════════════════
+with tab5:
+    st.markdown("""
+    <div style='font-size:1.02rem; color:#475569; margin-bottom:1.2rem; line-height:1.6;'>
+        Trực quan hóa và tương tác trực tiếp với <b>5 thao tác OLAP kinh điển</b> trên khối dữ liệu bán lẻ:<br>
+        <b>Roll-up (Thu gọn)</b> • <b>Drill-down (Chi tiết hóa)</b> • <b>Slice (Cắt lát đơn)</b> •
+        <b>Dice (Cắt khối đa chiều)</b> • <b>Pivot (Xoay ma trận)</b>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Chọn thao tác ──
+    olap_op = st.radio(
+        "Lựa chọn thao tác phân tích OLAP:",
+        options=[
+            "Roll-up (Thu gọn: Tháng → Quý → Năm)",
+            "Drill-down (Chi tiết hóa: Năm → Tháng)",
+            "Slice (Cắt lát đơn: Doanh thu theo Vùng)",
+            "Dice (Cắt khối đa chiều: Tiểu bang & Năm)",
+            "Pivot (Xoay ma trận: Tiểu bang theo Tháng)",
+        ],
+        horizontal=True,
+        label_visibility="visible",
+    )
+
+    st.markdown("---")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # ROLL-UP
+    # ──────────────────────────────────────────────────────────────────────────
+    if olap_op.startswith("Roll-up"):
+        section_header("bx bx-collapse-alt", "Thao tác ROLL-UP: Gộp dữ liệu từ cấp Tháng lên cấp Quý & Năm")
+        st.markdown("""
+        <div class='olap-op-card'>
+          <div class='olap-op-title'><i class='bx bx-chevrons-up'></i> Roll-up (Thu gọn cấp bậc)</div>
+          <div class='olap-op-desc'>Tổng hợp dữ liệu từ mức độ chi tiết nhất (Tháng) lên các mức tổng quát hơn (Quý, Năm).
+          Giúp nhà quản lý nhìn bức tranh toàn cảnh dài hạn mà không bị chi phối bởi biến động vụn vặt từng kỳ.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        rollup_level = st.selectbox(
+            "Chọn cấp độ tổng hợp thu gọn:",
+            options=["Thu gọn theo NĂM", "Thu gọn theo QUÝ", "Xem chi tiết THÁNG"],
+        )
+        level_key = "Năm" if "NĂM" in rollup_level else ("Quý" if "QUÝ" in rollup_level else "Tháng")
+        df_rollup = olap_rollup(level_key)
+
+        if df_rollup.empty:
+            st.info("Không có dữ liệu.")
+        else:
+            col_t, col_c = st.columns([1, 2])
+            with col_t:
+                df_table_show = df_rollup.drop(columns=[c for c in df_rollup.columns if c.startswith("_")], errors="ignore")
+                rename_map = {
+                    "nam": "Năm", "quy": "Quý", "thang_nam": "Tháng–Năm",
+                    "so_don_hang": "Số đơn hàng", "tong_san_luong": "Sản lượng", "tong_doanh_thu": "Doanh thu (BRL)"
+                }
+                st.dataframe(
+                    df_table_show.rename(columns=rename_map).style.format({"Doanh thu (BRL)": "{:,.2f}"}),
+                    use_container_width=True, height=360
+                )
+            with col_c:
+                if level_key == "Năm":
+                    x_col, x_label = "nam", "Năm"
+                    title = "Tổng Doanh Thu Theo Năm (Real Brazil)"
+                    df_plot = df_rollup.sort_values("_sort_year").copy()
+                elif level_key == "Quý":
+                    df_plot = df_rollup.sort_values(["_sort_year", "_sort_month"]).reset_index(drop=True).copy()
+                    quy_short = df_plot["quy"].str.extract(r"(Q\d)", expand=False).fillna(df_plot["quy"])
+                    df_plot["nhan"] = df_plot["nam"] + " – " + quy_short
+                    x_col, x_label = "nhan", "Năm – Quý"
+                    title = "Tổng Doanh Thu Theo Quý (Real Brazil)"
+                else:
+                    x_col, x_label = "thang_nam", "Tháng–Năm"
+                    title = "Doanh Thu Theo Tháng (Real Brazil)"
+                    df_plot = df_rollup.sort_values(["_sort_year", "_sort_month"]).copy()
+
+                fig_ru = px.bar(
+                    df_plot, x=x_col, y="tong_doanh_thu",
+                    color="tong_doanh_thu", color_continuous_scale="Blues",
+                    labels={x_col: x_label, "tong_doanh_thu": "Doanh thu (Real Brazil)"},
+                    title=title,
+                    text=df_plot["tong_doanh_thu"].apply(
+                        lambda v: f"{v/1e6:.2f}M BRL" if v >= 1e6 else f"{v/1000:,.0f}K BRL"
+                    ),
+                )
+                fig_ru.update_traces(
+                    textposition="outside",
+                    hovertemplate="%{x}<br>Doanh thu: <b>%{y:,.2f} BRL</b><extra></extra>"
+                )
+                fig_ru.update_layout(
+                    height=380, showlegend=False, coloraxis_showscale=False,
+                    margin=dict(l=20, r=20, t=40, b=60),
+                    xaxis=dict(tickangle=-30),
+                    yaxis=dict(title="Doanh thu (Real Brazil)", tickformat=",.0f")
+                )
+                st.plotly_chart(fig_ru, use_container_width=True)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # DRILL-DOWN
+    # ──────────────────────────────────────────────────────────────────────────
+    elif olap_op.startswith("Drill-down"):
+        section_header("bx bx-expand-alt", "Thao tác DRILL-DOWN: Phóng to từng tháng trong một năm")
+        st.markdown("""
+        <div class='olap-op-card'>
+          <div class='olap-op-title'><i class='bx bx-chevrons-down'></i> Drill-down (Chi tiết hóa)</div>
+          <div class='olap-op-desc'>Từ bức tranh tổng hợp hàng năm, đi sâu vào chi tiết từng tháng để phát hiện
+          mùa vụ kinh doanh, điểm đột biến và tốc độ tăng trưởng liên tiếp (MoM).</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        avail_years = meta["years"]
+        sel_year_dd = st.selectbox("Chọn năm để phóng to chi tiết:", options=avail_years, index=len(avail_years) - 1)
+        df_dd = olap_drilldown(int(sel_year_dd))
+
+        if not df_dd.empty:
+            df_dd = df_dd.sort_values("thang").reset_index(drop=True)
+
+            # Tính MoM chính xác: chỉ tính khi 2 tháng thực sự liên tiếp và doanh thu tháng trước >= 1,000 BRL
+            # (Loại bỏ các trường hợp thử nghiệm đầu dự án 2016 gây đột biến giả tạo hàng chục nghìn %)
+            df_dd["thang_prev"] = df_dd["thang"].shift(1)
+            is_consecutive = (df_dd["thang"] - df_dd["thang_prev"]) == 1
+            valid_base = (df_dd["doanh_thu"].shift(1) >= 1000) & is_consecutive
+            raw_growth = ((df_dd["doanh_thu"] - df_dd["doanh_thu"].shift(1)) / df_dd["doanh_thu"].shift(1) * 100).round(1)
+            df_dd["mom_growth"] = raw_growth.where(valid_base, np.nan)
+
+            col_d1, col_d2 = st.columns([3, 2])
+            with col_d1:
+                fig_dd = px.bar(
+                    df_dd, x="thang_nam", y="doanh_thu",
+                    color="quy",
+                    labels={"thang_nam": "Tháng", "doanh_thu": "Doanh thu (Real Brazil)", "quy": "Quý"},
+                    title=f"Doanh thu từng tháng trong năm {sel_year_dd} (tô màu theo Quý)",
+                    text=df_dd["doanh_thu"].apply(lambda v: f"{v/1000:,.0f}K"),
+                    color_discrete_sequence=["#1E40AF", "#2563EB", "#3B82F6", "#93C5FD"],
+                )
+                fig_dd.update_traces(
+                    textposition="outside",
+                    hovertemplate="Tháng: <b>%{x}</b><br>Doanh thu: <b>%{y:,.2f} BRL</b><extra></extra>"
+                )
+                fig_dd.update_layout(
+                    height=390, margin=dict(l=20, r=20, t=40, b=60),
+                    xaxis=dict(tickangle=-30),
+                    yaxis=dict(title="Doanh thu (Real Brazil)", tickformat=",.0f"),
+                    bargap=0.15,
+                )
+                st.plotly_chart(fig_dd, use_container_width=True)
+
+            with col_d2:
+                df_mom_valid = df_dd.dropna(subset=["mom_growth"]).copy()
+                if not df_mom_valid.empty:
+                    fig_mom = px.line(
+                        df_mom_valid,
+                        x="thang_nam", y="mom_growth",
+                        markers=True,
+                        labels={"thang_nam": "Tháng", "mom_growth": "Tăng trưởng MoM (%)"},
+                        title="Tốc độ tăng trưởng tháng sau so với tháng trước (%)",
+                        color_discrete_sequence=["#0D9488"],
+                    )
+                    fig_mom.update_traces(
+                        hovertemplate="Tháng: <b>%{x}</b><br>Tăng trưởng: <b>%{y:.1f}%</b><extra></extra>",
+                        line=dict(width=2.5)
+                    )
+                    fig_mom.add_hline(y=0, line_dash="dash", line_color="#94A3B8")
+                    fig_mom.update_layout(
+                        height=390, margin=dict(l=20, r=20, t=40, b=60),
+                        xaxis=dict(tickangle=-30),
+                        yaxis=dict(title="Tăng trưởng MoM (%)", ticksuffix="%"),
+                    )
+                    st.plotly_chart(fig_mom, use_container_width=True)
+                else:
+                    st.markdown(f"""
+                    <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:16px; color:#475569; font-size:0.9rem; margin-top:40px;">
+                        <div style="font-weight:700; color:#1E293B; margin-bottom:6px; display:flex; align-items:center; gap:6px;">
+                            <i class='bx bx-info-circle' style='font-size:1.2rem; color:#3B82F6;'></i>
+                            Lưu ý về dữ liệu năm {sel_year_dd}
+                        </div>
+                        Giai đoạn {sel_year_dd} là thời gian bắt đầu hệ thống thử nghiệm với số lượng đơn hàng hạn chế và ngắt quãng giữa các tháng, chưa đủ điều kiện chuỗi thời gian liên tục để tính MoM. Bạn hãy chọn <b>Năm 2017</b> để xem chu kỳ tăng trưởng đầy đủ 12 tháng.
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            st.dataframe(
+                df_dd[["thang_nam", "quy", "so_don_hang", "doanh_thu", "gia_tri_don_tb", "mom_growth"]]
+                .rename(columns={
+                    "thang_nam": "Tháng–Năm", "quy": "Quý",
+                    "so_don_hang": "Số đơn hàng", "doanh_thu": "Doanh thu (BRL)",
+                    "gia_tri_don_tb": "Giá trị đơn TB (BRL)", "mom_growth": "Tăng trưởng MoM (%)"
+                })
+                .style.format({
+                    "Doanh thu (BRL)": "{:,.2f}",
+                    "Giá trị đơn TB (BRL)": "{:,.2f}",
+                    "Tăng trưởng MoM (%)": lambda v: f"{v:+.1f}%" if pd.notna(v) else "—"
+                }),
+                use_container_width=True, height=260,
+            )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # SLICE
+    # ──────────────────────────────────────────────────────────────────────────
+    elif olap_op.startswith("Slice"):
+        section_header("bx bx-layer", "Thao tác SLICE: Cắt một lát phẳng theo chiều Thời gian")
+        st.markdown("""
+        <div class='olap-op-card'>
+          <div class='olap-op-title'><i class='bx bx-layer'></i> Slice (Cắt lát đơn)</div>
+          <div class='olap-op-desc'>Cố định một giá trị trên một chiều phân tích (ví dụ chọn cố định 1 năm),
+          sau đó quan sát toàn bộ chuyển động của các chiều còn lại (Vùng địa lý và Doanh thu tháng).</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        avail_years = meta["years"]
+        col_s_sel1, col_s_sel2 = st.columns([1, 1])
+        with col_s_sel1:
+            sel_year_sl = st.selectbox("Chọn năm (chiều Thời gian cố định):", options=avail_years, index=len(avail_years) - 1)
+        with col_s_sel2:
+            slice_mode = st.radio("Kiểu hiển thị biểu đồ:", ["Đường xu hướng (Line Chart)", "Cột chồng tỷ trọng (Stacked Bar)"], horizontal=True)
+
+        df_sl = olap_slice(int(sel_year_sl))
+
+        if not df_sl.empty:
+            # Chuẩn hóa tên vùng sang tiếng Việt
+            df_sl["vung_vn"] = df_sl["vung"].map(DANH_SACH_VUNG).fillna(df_sl["vung"])
+
+            # Xây dựng ma trận hoàn chỉnh (Full Grid) để tránh đường line bị gãy hoặc nhảy cóc
+            month_order_df = df_sl[["thang_nam", "_sort_year", "_sort_month"]].drop_duplicates().sort_values(["_sort_year", "_sort_month"])
+            month_list = month_order_df["thang_nam"].tolist()
+
+            pv_sl = df_sl.pivot_table(
+                index="thang_nam", columns="vung_vn", values="doanh_thu", fill_value=0
+            ).reindex(month_list, fill_value=0)
+
+            df_sl_clean = pv_sl.reset_index().melt(
+                id_vars="thang_nam", var_name="vung_vn", value_name="doanh_thu"
+            )
+
+            color_map = {
+                "Đông Nam": "#1E40AF",
+                "Nam": "#2563EB",
+                "Đông Bắc": "#0D9488",
+                "Trung Tây": "#F59E0B",
+                "Bắc": "#7C3AED",
+            }
+
+            col_s1, col_s2 = st.columns([3, 2])
+            with col_s1:
+                if "Đường" in slice_mode:
+                    fig_sl = px.line(
+                        df_sl_clean, x="thang_nam", y="doanh_thu", color="vung_vn",
+                        markers=True,
+                        labels={"thang_nam": "Tháng", "doanh_thu": "Doanh thu (Real Brazil)", "vung_vn": "Vùng kinh tế"},
+                        title=f"Doanh thu theo tháng & vùng địa lý — Lát cắt năm {sel_year_sl}",
+                        category_orders={"thang_nam": month_list},
+                        color_discrete_map=color_map,
+                    )
+                    fig_sl.update_traces(
+                        hovertemplate="Vùng: <b>%{data.name}</b><br>Tháng: <b>%{x}</b><br>Doanh thu: <b>%{y:,.2f} BRL</b><extra></extra>",
+                        line=dict(width=2.5)
+                    )
+                else:
+                    fig_sl = px.bar(
+                        df_sl_clean, x="thang_nam", y="doanh_thu", color="vung_vn",
+                        labels={"thang_nam": "Tháng", "doanh_thu": "Doanh thu (Real Brazil)", "vung_vn": "Vùng kinh tế"},
+                        title=f"Cơ cấu doanh thu theo tháng & vùng — Lát cắt năm {sel_year_sl}",
+                        category_orders={"thang_nam": month_list},
+                        color_discrete_map=color_map,
+                        barmode="stack"
+                    )
+                    fig_sl.update_traces(
+                        hovertemplate="Vùng: <b>%{data.name}</b><br>Tháng: <b>%{x}</b><br>Doanh thu: <b>%{y:,.2f} BRL</b><extra></extra>"
+                    )
+
+                fig_sl.update_layout(
+                    height=410, margin=dict(l=20, r=20, t=40, b=60),
+                    xaxis=dict(tickangle=-30),
+                    yaxis=dict(title="Doanh thu (Real Brazil)", tickformat=",.0f"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                st.plotly_chart(fig_sl, use_container_width=True)
+
+            with col_s2:
+                region_total = df_sl.groupby("vung_vn")["doanh_thu"].sum().reset_index().sort_values("doanh_thu", ascending=False)
+                fig_pie_sl = px.pie(
+                    region_total, values="doanh_thu", names="vung_vn", hole=0.45,
+                    title=f"Tỷ trọng doanh thu theo vùng năm {sel_year_sl}",
+                    color="vung_vn", color_discrete_map=color_map,
+                )
+                fig_pie_sl.update_traces(
+                    hovertemplate="Vùng: <b>%{label}</b><br>Doanh thu: <b>%{value:,.2f} BRL</b><br>Tỷ trọng: <b>%{percent}</b><extra></extra>"
+                )
+                fig_pie_sl.update_layout(height=410, margin=dict(l=20, r=20, t=40, b=20))
+                st.plotly_chart(fig_pie_sl, use_container_width=True)
+
+            st.markdown(f"""
+            <div style='color:#64748B; font-size:0.86rem; margin-top:4px; display:flex; align-items:center; gap:6px;'>
+                <i class='bx bx-info-circle' style='font-size:1.1rem; color:#2563EB;'></i>
+                Lát cắt cố định: <b>Năm = {sel_year_sl}</b> — Khảo sát trên <b>{df_sl['vung_vn'].nunique()}</b> vùng kinh tế trong suốt <b>{len(month_list)}</b> tháng hoạt động.
+            </div>
+            """, unsafe_allow_html=True)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # DICE
+    # ──────────────────────────────────────────────────────────────────────────
+    elif olap_op.startswith("Dice"):
+        section_header("bx bx-cube-alt", "Thao tác DICE: Cắt khối đa chiều (Tiểu bang & Năm)")
+        st.markdown("""
+        <div class='olap-op-card'>
+          <div class='olap-op-title'><i class='bx bx-cube-alt'></i> Dice (Cắt khối đa chiều)</div>
+          <div class='olap-op-desc'>Thu hẹp phạm vi đồng thời trên <b>nhiều chiều dữ liệu</b> (kết hợp lọc cả Năm và một nhóm Tiểu bang cụ thể).
+          Tạo thành một khối con độc lập (sub-cube) để đối chiếu trực tiếp giữa các thị trường mục tiêu.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        avail_years = meta["years"]
+        col_dc1, col_dc2 = st.columns(2)
+        with col_dc1:
+            sel_year_dc = st.selectbox("Chiều Thời gian — chọn năm:", options=avail_years, index=len(avail_years) - 1)
+        with col_dc2:
+            top_states_default = meta["states"][:5] if len(meta["states"]) >= 5 else meta["states"]
+            sel_states_dc = st.multiselect(
+                "Chiều Địa lý — chọn các tiểu bang muốn so sánh:",
+                options=meta["states"],
+                default=top_states_default,
+                format_func=lambda x: DANH_SACH_TIEU_BANG.get(x, x),
+                placeholder="Chọn ít nhất 2 tiểu bang...",
+            )
+
+        if len(sel_states_dc) < 1:
+            st.info("Vui lòng chọn ít nhất 1 tiểu bang để tiến hành phân tích Dice.")
+        else:
+            df_dc = olap_dice(tuple(sel_states_dc), int(sel_year_dc))
+            if df_dc.empty:
+                st.warning("Không có dữ liệu phù hợp với điều kiện đã chọn.")
+            else:
+                df_dc["ten_tieu_bang"] = df_dc["tieu_bang"].map(DANH_SACH_TIEU_BANG).fillna(df_dc["tieu_bang"])
+
+                # Xây dựng Full Grid đảm bảo không bị khuyết tháng gây gãy nét vẽ
+                month_order_dc = df_dc[["thang_nam", "_sort_year", "_sort_month"]].drop_duplicates().sort_values(["_sort_year", "_sort_month"])
+                month_list_dc = month_order_dc["thang_nam"].tolist()
+
+                pv_dc = df_dc.pivot_table(
+                    index="thang_nam", columns="ten_tieu_bang", values="doanh_thu", fill_value=0
+                ).reindex(month_list_dc, fill_value=0)
+
+                df_dc_clean = pv_dc.reset_index().melt(
+                    id_vars="thang_nam", var_name="ten_tieu_bang", value_name="doanh_thu"
+                )
+
+                col_dc_c1, col_dc_c2 = st.columns([3, 2])
+                with col_dc_c1:
+                    fig_dc = px.line(
+                        df_dc_clean, x="thang_nam", y="doanh_thu", color="ten_tieu_bang",
+                        markers=True,
+                        labels={"thang_nam": "Tháng", "doanh_thu": "Doanh thu (Real Brazil)", "ten_tieu_bang": "Tiểu bang"},
+                        title=f"Doanh thu theo tháng — Khối con: {len(sel_states_dc)} bang × Năm {sel_year_dc}",
+                        category_orders={"thang_nam": month_list_dc},
+                    )
+                    fig_dc.update_traces(
+                        hovertemplate="Bang: <b>%{data.name}</b><br>Tháng: <b>%{x}</b><br>Doanh thu: <b>%{y:,.2f} BRL</b><extra></extra>",
+                        line=dict(width=2.5)
+                    )
+                    fig_dc.update_layout(
+                        height=420, margin=dict(l=20, r=20, t=40, b=60),
+                        xaxis=dict(tickangle=-30),
+                        yaxis=dict(title="Doanh thu (Real Brazil)", tickformat=",.0f"),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    st.plotly_chart(fig_dc, use_container_width=True)
+
+                with col_dc_c2:
+                    state_agg = df_dc.groupby("ten_tieu_bang").agg(
+                        tong_doanh_thu=("doanh_thu", "sum"),
+                        tong_don=("so_don_hang", "sum"),
+                    ).reset_index().sort_values("tong_doanh_thu", ascending=True)
+                    fig_dc_bar = px.bar(
+                        state_agg, x="tong_doanh_thu", y="ten_tieu_bang",
+                        orientation="h", color="tong_doanh_thu", color_continuous_scale="Blues",
+                        labels={"tong_doanh_thu": "Tổng doanh thu (Real Brazil)", "ten_tieu_bang": "Tiểu bang"},
+                        title=f"Tổng doanh thu năm {sel_year_dc} theo bang",
+                        text=state_agg["tong_doanh_thu"].apply(lambda v: f"{v/1000:,.0f}K"),
+                    )
+                    fig_dc_bar.update_traces(
+                        textposition="outside",
+                        hovertemplate="Bang: <b>%{y}</b><br>Doanh thu: <b>%{x:,.2f} BRL</b><extra></extra>"
+                    )
+                    fig_dc_bar.update_layout(
+                        height=420, showlegend=False, coloraxis_showscale=False,
+                        margin=dict(l=20, r=20, t=40, b=20)
+                    )
+                    st.plotly_chart(fig_dc_bar, use_container_width=True)
+
+                st.markdown(f"""
+                <div style='color:#64748B; font-size:0.86rem; margin-top:4px; display:flex; align-items:center; gap:6px;'>
+                    <i class='bx bx-info-circle' style='font-size:1.1rem; color:#2563EB;'></i>
+                    Khối con được xác định bởi: <b>Năm = {sel_year_dc}</b> và <b>{len(sel_states_dc)} tiểu bang</b> ({', '.join(sel_states_dc)}).
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.dataframe(
+                    df_dc[["thang_nam", "tieu_bang", "ten_tieu_bang", "vung", "so_don_hang", "doanh_thu", "gia_tb"]]
+                    .rename(columns={
+                        "thang_nam": "Tháng", "tieu_bang": "Mã bang", "ten_tieu_bang": "Tiểu bang",
+                        "vung": "Vùng", "so_don_hang": "Số đơn", "doanh_thu": "Doanh thu (BRL)", "gia_tb": "Giá TB (BRL)"
+                    })
+                    .style.format({"Doanh thu (BRL)": "{:,.2f}", "Giá TB (BRL)": "{:,.2f}"}),
+                    use_container_width=True, height=280,
+                )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # PIVOT
+    # ──────────────────────────────────────────────────────────────────────────
+    else:
+        section_header("bx bx-sync", "Thao tác PIVOT: Xoay ma trận so sánh các tiểu bang theo tháng")
+        st.markdown("""
+        <div class='olap-op-card'>
+          <div class='olap-op-title'><i class='bx bx-sync'></i> Pivot (Xoay ma trận)</div>
+          <div class='olap-op-desc'>Hoán đổi các chiều trong ma trận: biến <b>Tiểu bang</b> thành các cột và <b>Tháng</b> thành các hàng.
+          Cho phép quan sát đồng thời diễn biến doanh thu giữa nhiều bang trên cùng một mặt phẳng bảng số liệu hoặc bản đồ nhiệt.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col_pv_s1, col_pv_s2 = st.columns([1, 2])
+        with col_pv_s1:
+            sel_year_pv = st.selectbox(
+                "Phạm vi thời gian:",
+                options=["Toàn bộ thời gian (2016 – 2018)", 2017, 2018, 2016],
+                index=0
+            )
+            year_arg = None if "Toàn bộ" in str(sel_year_pv) else int(sel_year_pv)
+
+        with col_pv_s2:
+            top_states_pv = meta["states"][:5] if len(meta["states"]) >= 5 else meta["states"]
+            sel_states_pv = st.multiselect(
+                "Chọn các tiểu bang để đưa vào ma trận (tối đa 8 bang):",
+                options=meta["states"],
+                default=top_states_pv,
+                format_func=lambda x: DANH_SACH_TIEU_BANG.get(x, x),
+                max_selections=8,
+            )
+
+        if not sel_states_pv:
+            st.info("Vui lòng chọn ít nhất 1 tiểu bang.")
+        else:
+            df_pv = olap_pivot(tuple(sel_states_pv), year=year_arg)
+            if df_pv.empty:
+                st.warning("Không có dữ liệu.")
+            else:
+                state_cols = [c for c in df_pv.columns if c != "thang_nam"]
+
+                col_pv1, col_pv2 = st.columns([2, 3])
+                with col_pv1:
+                    st.markdown("<b>Ma trận số liệu Pivot — Doanh thu (Real Brazil)</b>", unsafe_allow_html=True)
+                    # Đổi tên cột sang tên đầy đủ
+                    df_pv_display = df_pv.copy()
+                    display_col_map = {c: DANH_SACH_TIEU_BANG.get(c, c) for c in state_cols}
+                    df_pv_display = df_pv_display.rename(columns=display_col_map)
+                    styled = df_pv_display.set_index("thang_nam").style.format("{:,.0f}").background_gradient(
+                        cmap="Blues", axis=None
+                    )
+                    st.dataframe(styled, use_container_width=True, height=430)
+
+                with col_pv2:
+                    df_pv_melt = df_pv.melt(
+                        id_vars="thang_nam", value_vars=state_cols,
+                        var_name="Tiểu bang", value_name="Doanh thu (Real Brazil)"
+                    )
+                    df_pv_melt["Tên tiểu bang"] = df_pv_melt["Tiểu bang"].map(DANH_SACH_TIEU_BANG).fillna(df_pv_melt["Tiểu bang"])
+                    month_order = df_pv["thang_nam"].tolist()
+
+                    fig_pv = px.line(
+                        df_pv_melt, x="thang_nam", y="Doanh thu (Real Brazil)", color="Tên tiểu bang",
+                        markers=True,
+                        labels={"thang_nam": "Tháng–Năm"},
+                        title="Diễn biến doanh thu theo tháng — Pivot Chart",
+                        category_orders={"thang_nam": month_order},
+                    )
+                    fig_pv.update_traces(
+                        hovertemplate="Bang: <b>%{data.name}</b><br>Tháng: <b>%{x}</b><br>Doanh thu: <b>%{y:,.2f} BRL</b><extra></extra>",
+                        line=dict(width=2.5)
+                    )
+                    fig_pv.update_layout(
+                        height=430, margin=dict(l=20, r=20, t=40, b=60),
+                        xaxis=dict(tickangle=-30),
+                        yaxis=dict(title="Doanh thu (Real Brazil)", tickformat=",.0f"),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    st.plotly_chart(fig_pv, use_container_width=True)
+
+                # Heatmap
+                st.markdown("<b>Bản đồ nhiệt ma trận (Heatmap Pivot)</b>", unsafe_allow_html=True)
+                df_heat = df_pv.set_index("thang_nam")[state_cols]
+                df_heat.columns = [DANH_SACH_TIEU_BANG.get(c, c) for c in df_heat.columns]
+                fig_heat = go.Figure(data=go.Heatmap(
+                    z=df_heat.values,
+                    x=df_heat.columns.tolist(),
+                    y=df_heat.index.tolist(),
+                    colorscale="Blues",
+                    hovertemplate="Tháng: <b>%{y}</b><br>Bang: <b>%{x}</b><br>Doanh thu: <b>%{z:,.0f} BRL</b><extra></extra>",
+                    zmin=0,
+                ))
+                fig_heat.update_layout(
+                    height=max(360, len(df_heat) * 24),
+                    margin=dict(l=20, r=20, t=20, b=40),
+                    xaxis_title="Tiểu bang",
+                    yaxis=dict(title="Tháng–Năm", autorange="reversed", tickfont=dict(size=10)),
+                )
+                st.plotly_chart(fig_heat, use_container_width=True)
+
+
