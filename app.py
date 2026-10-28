@@ -446,7 +446,17 @@ def load_filtered_monthly(filters_tuple):
         df = pd.read_sql_query(text(q), conn, params=params)
     df.columns = ["Tháng Năm", "Năm", "Tháng", "Tổng số đơn hàng", "Tổng số sản phẩm", "Doanh thu hàng tháng", "Đơn giá trung bình", "Tổng cước vận chuyển"]
     df["Doanh thu tháng trước"] = df["Doanh thu hàng tháng"].shift(1)
-    df["Tốc độ tăng trưởng so với tháng trước (%)"] = ((df["Doanh thu hàng tháng"] - df["Doanh thu tháng trước"]) / NULL_ZERO(df["Doanh thu tháng trước"]) * 100).round(2)
+
+    # Kiểm tra tính liên tục theo tháng: chỉ tính MoM khi 2 tháng thực sự liên tiếp
+    months_diff = (df["Năm"] * 12 + df["Tháng"]) - (df["Năm"].shift(1) * 12 + df["Tháng"].shift(1))
+    is_consecutive = months_diff == 1
+
+    # Loại bỏ ngoại lai cực đoan trong giai đoạn thử nghiệm (doanh thu cơ sở < 1,000 BRL)
+    # Tránh trường hợp 2016-12 chỉ có 10.9 BRL -> 2017-01 tăng 1,101,718% làm bẹp toàn bộ biểu đồ
+    valid_base = (df["Doanh thu tháng trước"] >= 1000) & is_consecutive
+
+    growth = ((df["Doanh thu hàng tháng"] - df["Doanh thu tháng trước"]) / NULL_ZERO(df["Doanh thu tháng trước"]) * 100).round(2)
+    df["Tốc độ tăng trưởng so với tháng trước (%)"] = growth.where(valid_base, np.nan)
     return df
 
 @st.cache_data(ttl=3600)
@@ -769,22 +779,22 @@ with tab1:
     if not df_monthly.empty:
         col_l, col_r = st.columns([2, 1])
         with col_l:
-            section_header("bx bx-line-chart", "Doanh thu theo tháng và tốc độ tăng trưởng")
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                x=df_monthly["Tháng Năm"], y=df_monthly["Doanh thu hàng tháng"],
-                name="Doanh thu (Real Brazil)", marker_color="#2563EB", opacity=0.85,
-            ))
-            fig.add_trace(go.Scatter(
-                x=df_monthly["Tháng Năm"], y=df_monthly["Tốc độ tăng trưởng so với tháng trước (%)"],
-                name="Tăng trưởng so với tháng trước (%)", yaxis="y2", mode="lines+markers",
-                line=dict(color="#10B981", width=2.5),
-            ))
+            section_header("bx bx-line-chart", "Doanh thu bán hàng lẻ theo từng tháng")
+            fig = px.bar(
+                df_monthly, x="Tháng Năm", y="Doanh thu hàng tháng",
+                labels={"Tháng Năm": "Tháng", "Doanh thu hàng tháng": "Doanh thu (Real Brazil)"},
+                color="Doanh thu hàng tháng", color_continuous_scale="Blues",
+                text=df_monthly["Doanh thu hàng tháng"].apply(lambda x: f"{x/1000:,.0f}K BRL" if x >= 1000 else f"{x:.0f} BRL")
+            )
+            fig.update_traces(
+                textposition="outside",
+                hovertemplate="Tháng: <b>%{x}</b><br>Doanh thu: <b>%{y:,.2f} BRL</b><extra></extra>",
+            )
             fig.update_layout(
-                yaxis=dict(title="Doanh thu (Real Brazil)"),
-                yaxis2=dict(title="Tốc độ tăng trưởng (%)", overlaying="y", side="right", showgrid=False),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02),
-                height=380, margin=dict(l=40, r=40, t=30, b=40),
+                yaxis=dict(title="Doanh thu (Real Brazil)", tickformat=",.0f"),
+                height=380, margin=dict(l=40, r=20, t=30, b=40),
+                showlegend=False,
+                coloraxis_showscale=False
             )
             st.plotly_chart(fig, use_container_width=True)
 
@@ -881,17 +891,28 @@ with tab2:
             fig_cat_rev.update_layout(height=480, showlegend=False, yaxis=dict(autorange="reversed"))
             st.plotly_chart(fig_cat_rev, use_container_width=True)
         with col_c2:
+            df_cat_subset = df_cat.head(top_cat * 2).copy()
+
             fig_cat_aov = px.scatter(
-                df_cat.head(top_cat * 2), x="Số lượng đơn hàng", y="Đơn giá trung bình",
+                df_cat_subset, x="Số lượng đơn hàng", y="Đơn giá trung bình",
                 size="Doanh thu", color="Doanh thu",
-                hover_name="Danh mục sản phẩm", text="Danh mục sản phẩm",
+                hover_name="Danh mục sản phẩm",
                 title="Tương quan giữa số lượng đơn hàng và đơn giá bình quân",
-                labels={"Số lượng đơn hàng":"Số lượng đơn hàng","Đơn giá trung bình":"Đơn giá trung bình (Real Brazil)"},
+                labels={"Số lượng đơn hàng": "Số lượng đơn hàng", "Đơn giá trung bình": "Đơn giá trung bình (Real Brazil)"},
                 color_continuous_scale="Blues",
             )
-            fig_cat_aov.update_traces(textposition="top center", textfont_size=9)
-            fig_cat_aov.update_layout(height=480, showlegend=False)
+            fig_cat_aov.update_traces(
+                hovertemplate="<b>%{hovertext}</b><br><br>Số lượng đơn hàng: <b>%{x:,.0f} đơn</b><br>Đơn giá bình quân: <b>%{y:,.2f} BRL</b><br>Tổng doanh thu: <b>%{marker.size:,.2f} BRL</b><extra></extra>"
+            )
+            fig_cat_aov.update_layout(
+                height=480, 
+                showlegend=False,
+                margin=dict(l=30, r=30, t=40, b=30),
+                xaxis=dict(tickformat=","),
+                yaxis=dict(ticksuffix=" BRL")
+            )
             st.plotly_chart(fig_cat_aov, use_container_width=True)
+            st.caption("ℹ️ *Đã loại bỏ chữ trong biểu đồ để tránh đè chữ. Bạn chỉ cần rê chuột vào từng điểm bong bóng để xem đầy đủ tên danh mục và thông số.*")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
