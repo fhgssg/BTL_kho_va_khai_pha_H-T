@@ -1,7 +1,14 @@
 """
 File: 01_eda_and_cleaning.py
-Mô tả: Khám phá chất lượng dữ liệu (EDA), phân tích độ hạt giao dịch, kiểm tra trùng lặp,
-       phân loại lý do loại trừ dữ liệu và tiền xử lý làm sạch chuẩn hóa phục vụ DWH & Data Mining.
+Mô tả: Giai đoạn 1 - Khám phá chất lượng dữ liệu (EDA) & Làm sạch / Hợp nhất
+       bộ dữ liệu Olist Brazilian E-Commerce gồm 5 bảng nguồn:
+         - olist_orders_dataset.csv
+         - olist_order_items_dataset.csv
+         - olist_customers_dataset.csv
+         - olist_products_dataset.csv
+         - olist_order_payments_dataset.csv
+         - product_category_name_translation.csv (tra cứu danh mục)
+       Đầu ra: data/processed/data_cleaned.csv & data/processed/data_rejected.csv
 """
 
 import os
@@ -10,295 +17,297 @@ import pandas as pd
 import numpy as np
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAW_DATA_PATH = os.path.join(BASE_DIR, "data", "raw", "data.csv")
-CLEAN_DATA_PATH = os.path.join(BASE_DIR, "data", "processed", "data_cleaned.csv")
+RAW_DIR  = os.path.join(BASE_DIR, "data", "raw")
+
+# ── Đường dẫn file nguồn ──
+RAW_ORDERS      = os.path.join(RAW_DIR, "olist_orders_dataset.csv")
+RAW_ITEMS       = os.path.join(RAW_DIR, "olist_order_items_dataset.csv")
+RAW_CUSTOMERS   = os.path.join(RAW_DIR, "olist_customers_dataset.csv")
+RAW_PRODUCTS    = os.path.join(RAW_DIR, "olist_products_dataset.csv")
+RAW_PAYMENTS    = os.path.join(RAW_DIR, "olist_order_payments_dataset.csv")
+RAW_CATEGORY    = os.path.join(RAW_DIR, "product_category_name_translation.csv")
+
+# ── Đường dẫn đầu ra ──
+CLEAN_DATA_PATH    = os.path.join(BASE_DIR, "data", "processed", "data_cleaned.csv")
 REJECTED_DATA_PATH = os.path.join(BASE_DIR, "data", "processed", "data_rejected.csv")
-AUDIT_OUTPUT_PATH = os.path.join(BASE_DIR, "outputs", "data_cleaning_audit.csv")
+AUDIT_OUTPUT_PATH  = os.path.join(BASE_DIR, "outputs", "data_cleaning_audit.csv")
 
 os.makedirs(os.path.join(BASE_DIR, "data", "processed"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "outputs"), exist_ok=True)
 
+
 def run_eda_and_cleaning(
-    input_file=None, 
+    raw_orders=None,
+    raw_items=None,
+    raw_customers=None,
+    raw_products=None,
+    raw_payments=None,
+    raw_category=None,
     output_clean=None,
     output_rejected=None,
-    output_audit=None
+    output_audit=None,
 ):
-    if input_file is None:
-        input_file = RAW_DATA_PATH
-    if output_clean is None:
-        output_clean = CLEAN_DATA_PATH
-    if output_rejected is None:
-        output_rejected = REJECTED_DATA_PATH
-    if output_audit is None:
-        output_audit = AUDIT_OUTPUT_PATH
+    """
+    Hàm EDA & làm sạch chính cho bộ dữ liệu Olist.
+    Trả về: (df_clean, df_rejected, df_audit)
+    """
+    raw_orders    = raw_orders    or RAW_ORDERS
+    raw_items     = raw_items     or RAW_ITEMS
+    raw_customers = raw_customers or RAW_CUSTOMERS
+    raw_products  = raw_products  or RAW_PRODUCTS
+    raw_payments  = raw_payments  or RAW_PAYMENTS
+    raw_category  = raw_category  or RAW_CATEGORY
+    output_clean    = output_clean    or CLEAN_DATA_PATH
+    output_rejected = output_rejected or REJECTED_DATA_PATH
+    output_audit    = output_audit    or AUDIT_OUTPUT_PATH
 
     print("=" * 85)
-    print(" GIAI ĐOẠN 1: KHÁM PHÁ CHẤT LƯỢNG DỮ LIỆU (EDA) & XÂY DỰNG QUY TẮC LÀM SẠCH")
+    print(" GIAI ĐOẠN 1: KHÁM PHÁ CHẤT LƯỢNG DỮ LIỆU (EDA) & LÀM SẠCH — OLIST DATASET")
     print("=" * 85)
 
-    # --------------------------------------------------------------------------
-    # 1. ĐỌC DỮ LIỆU & KIỂM TRA ĐỘ HẠT (GRANULARITY & SCHEMA VERIFICATION)
-    # --------------------------------------------------------------------------
-    print(f"\n[BƯỚC 1/6] ĐỌC DỮ LIỆU & XÁC NHẬN ĐỘ HẠT TỪ '{input_file}'...")
-    # BẢO TOÀN KIỂU CHUỖI cho InvoiceNo và StockCode (tránh mất số 0 đầu hoặc ký tự chữ cái)
-    dtype_spec = {
-        'InvoiceNo': str,
-        'StockCode': str,
-        'Description': str,
-        'Country': str
-    }
-    try:
-        df = pd.read_csv(input_file, encoding='utf-8', dtype=dtype_spec)
-    except UnicodeDecodeError:
-        df = pd.read_csv(input_file, encoding='ISO-8859-1', dtype=dtype_spec)
+    # ──────────────────────────────────────────────────────────────────────────
+    # BƯỚC 1: ĐỌC CÁC BẢNG NGUỒN & KIỂM TRA SƠ BỘ
+    # ──────────────────────────────────────────────────────────────────────────
+    print("\n[BƯỚC 1/6] ĐỌC 6 BẢNG NGUỒN OLIST & XÁC NHẬN CẤU TRÚC...")
+
+    for path in [raw_orders, raw_items, raw_customers, raw_products, raw_payments, raw_category]:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Không tìm thấy file nguồn: {path}")
+
+    df_orders    = pd.read_csv(raw_orders,    dtype=str)
+    df_items     = pd.read_csv(raw_items,     dtype=str)
+    df_customers = pd.read_csv(raw_customers, dtype=str)
+    df_products  = pd.read_csv(raw_products,  dtype=str)
+    df_payments  = pd.read_csv(raw_payments,  dtype=str)
+    df_category  = pd.read_csv(raw_category)
+
+    print(f"  + orders    : {len(df_orders):>7,} dòng × {len(df_orders.columns)} cột")
+    print(f"  + items     : {len(df_items):>7,} dòng × {len(df_items.columns)} cột")
+    print(f"  + customers : {len(df_customers):>7,} dòng × {len(df_customers.columns)} cột")
+    print(f"  + products  : {len(df_products):>7,} dòng × {len(df_products.columns)} cột")
+    print(f"  + payments  : {len(df_payments):>7,} dòng × {len(df_payments.columns)} cột")
+    print(f"  + category  : {len(df_category):>7,} dòng × {len(df_category.columns)} cột  (từ điển dịch)")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # BƯỚC 2: HỢP NHẤT (JOIN) CÁC BẢNG THÀNH BẢNG PHẲNG PHÂN TÍCH
+    # ──────────────────────────────────────────────────────────────────────────
+    print("\n[BƯỚC 2/6] HỢP NHẤT CÁC BẢNG (JOIN THEO order_id / product_id)...")
+
+    # 2.1 items ← customers qua orders
+    df = (
+        df_items
+        .merge(df_orders,    on="order_id",   how="left", suffixes=("", "_order"))
+        .merge(df_customers, on="customer_id", how="left", suffixes=("", "_cust"))
+    )
+
+    # 2.2 products + dịch category
+    df_products_named = df_products.merge(
+        df_category,
+        on="product_category_name",
+        how="left"
+    )
+    df = df.merge(df_products_named, on="product_id", how="left", suffixes=("", "_prod"))
+
+    # 2.3 payments: lấy tổng tiền mỗi đơn (nhiều phương thức → tổng hợp)
+    df_pay_agg = (
+        df_payments
+        .assign(payment_value=lambda x: pd.to_numeric(x["payment_value"], errors="coerce").fillna(0))
+        .groupby("order_id")
+        .agg(
+            payment_type       =("payment_type",         lambda s: s.mode().iloc[0] if len(s) else "unknown"),
+            payment_installments=("payment_installments", lambda s: pd.to_numeric(s, errors="coerce").max()),
+            total_payment_value=("payment_value",         "sum"),
+        )
+        .reset_index()
+    )
+    df = df.merge(df_pay_agg, on="order_id", how="left")
 
     total_raw_rows = len(df)
-    print(f"-> Quy mô dữ liệu ban đầu: {total_raw_rows:,} dòng x {len(df.columns)} cột.")
-    
-    required_cols = ['InvoiceNo', 'StockCode', 'Description', 'Quantity', 'InvoiceDate', 'UnitPrice', 'CustomerID', 'Country']
-    missing_required = [c for c in required_cols if c not in df.columns]
-    if missing_required:
-        raise ValueError(f"Dữ liệu thiếu các cột bắt buộc cho DWH: {missing_required}")
-    print(f"-> Kiểm tra trường bắt buộc: Đầy đủ cả 8/8 cột ({', '.join(required_cols)}) [OK]")
-    print("-> Độ hạt giao dịch (Granularity): 1 dòng = 1 mặt hàng trong 1 hóa đơn (Line-item level).")
+    print(f"  → Bảng hợp nhất: {total_raw_rows:,} dòng × {len(df.columns)} cột (độ hạt: 1 dòng = 1 order_item)")
 
-    # --------------------------------------------------------------------------
-    # 2. KHẢO SÁT CHẤT LƯỢNG DỮ LIỆU NGUỒN & XỬ LÝ KHUYẾT THIẾU
-    # --------------------------------------------------------------------------
-    print("\n" + "=" * 85)
-    print("[BƯỚC 2/6] KHẢO SÁT CHẤT LƯỢNG DỮ LIỆU NGUỒN (MISSING, DUPLICATES, ANOMALIES)")
-    print("=" * 85)
+    # ──────────────────────────────────────────────────────────────────────────
+    # BƯỚC 3: KIỂM TRA CHẤT LƯỢNG DỮ LIỆU (MISSING, ANOMALIES, DUPLICATES)
+    # ──────────────────────────────────────────────────────────────────────────
+    print("\n[BƯỚC 3/6] KIỂM TRA CHẤT LƯỢNG DỮ LIỆU NGUỒN...")
 
-    # 2.1 Missing Values
+    # 3.1 Chuyển kiểu cho các cột số/ngày cần dùng
+    df["price"]         = pd.to_numeric(df["price"],         errors="coerce")
+    df["freight_value"] = pd.to_numeric(df["freight_value"], errors="coerce")
+    df["order_item_id"] = pd.to_numeric(df["order_item_id"], errors="coerce")
+
+    for col in ["order_purchase_timestamp", "order_approved_at",
+                "order_delivered_carrier_date", "order_delivered_customer_date",
+                "order_estimated_delivery_date", "shipping_limit_date"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+
+    # 3.2 Missing values
     null_counts = df.isnull().sum()
-    null_pct = (null_counts / total_raw_rows) * 100
-    missing_df = pd.DataFrame({"Missing_Count": null_counts, "Percentage(%)": null_pct.round(2)})
+    null_pct    = (null_counts / total_raw_rows * 100).round(2)
+    missing_df  = pd.DataFrame({"Missing_Count": null_counts, "Percentage(%)": null_pct})
     print("\n1. Thống kê dữ liệu khuyết thiếu (Missing Values):")
-    print(missing_df[missing_df["Missing_Count"] > 0])
+    print(missing_df[missing_df["Missing_Count"] > 0].to_string())
 
-    # Chuẩn hóa chuỗi InvoiceNo và StockCode
-    df['InvoiceNo'] = df['InvoiceNo'].astype(str).str.strip()
-    df['StockCode'] = df['StockCode'].astype(str).str.strip()
-
-    # Kiểm tra tính hợp lệ của StockCode và InvoiceDate
-    invalid_stockcode = (df['StockCode'].isnull()) | (df['StockCode'] == '') | (df['StockCode'].str.lower() == 'nan')
-    parsed_dates = pd.to_datetime(df['InvoiceDate'], errors='coerce')
-    invalid_date = parsed_dates.isnull()
-    parsed_qty = pd.to_numeric(df['Quantity'], errors='coerce')
-    invalid_qty = parsed_qty.isnull()
-    parsed_price = pd.to_numeric(df['UnitPrice'], errors='coerce')
-    invalid_price = parsed_price.isnull()
-
-    print(f"\n2. Kiểm tra tính toàn vẹn định dạng kỹ thuật:")
-    print(f"   + StockCode bị rỗng / không hợp lệ: {invalid_stockcode.sum():,} dòng")
-    print(f"   + InvoiceDate không parse được: {invalid_date.sum():,} dòng")
-    print(f"   + Quantity không phải số: {invalid_qty.sum():,} dòng")
-    print(f"   + UnitPrice không phải số: {invalid_price.sum():,} dòng")
-
-    # 2.2 Xử lý Description: Bổ sung từ StockCode (Imputation) thay vì tự động ép thành 'NAN'
-    print(f"\n3. Phân tích cột Description & Ánh xạ khôi phục:")
-    # Nhận diện dòng thiếu Description thực sự (bao gồm null, rỗng, hoặc chuỗi 'nan')
-    is_raw_desc_missing = df['Description'].isnull() | (df['Description'].astype(str).str.strip() == '') | (df['Description'].astype(str).str.lower() == 'nan')
-    raw_missing_desc_count = is_raw_desc_missing.sum()
-    print(f"   + Tổng số dòng thiếu Description ban đầu: {raw_missing_desc_count:,} dòng ({raw_missing_desc_count/total_raw_rows*100:.2f}%)")
-
-    # Xây dựng từ điển tra cứu StockCode -> Description từ các bản ghi hợp lệ
-    valid_desc_df = df[~is_raw_desc_missing].copy()
-    valid_desc_df['CleanDesc'] = valid_desc_df['Description'].astype(str).str.strip().str.upper()
-    stock_desc_lookup = valid_desc_df.groupby('StockCode')['CleanDesc'].agg(
-        lambda s: s.mode().iloc[0] if not s.empty else np.nan
-    ).to_dict()
-
-    # Bổ sung Description từ StockCode
-    imputed_desc_series = df['StockCode'].map(stock_desc_lookup)
-    can_impute_count = (is_raw_desc_missing & imputed_desc_series.notnull()).sum()
-    cannot_impute_count = (is_raw_desc_missing & imputed_desc_series.isnull()).sum()
-    print(f"   + Số dòng khôi phục được Description từ StockCode: {can_impute_count:,} dòng")
-    print(f"   + Số dòng hoàn toàn không có ánh xạ Description: {cannot_impute_count:,} dòng (Toàn bộ có UnitPrice = 0.00)")
-
-    # Gán mô tả đã khôi phục vào DataFrame làm việc
-    df['Description_Clean'] = df['Description'].where(~is_raw_desc_missing, imputed_desc_series)
-    df['Description_Clean'] = df['Description_Clean'].fillna('UNKNOWN DESCRIPTION').astype(str).str.strip().str.upper()
-
-    # 2.3 Phân tích bản ghi trùng lặp
+    # 3.3 Trùng lặp (order_id, order_item_id) — khóa tự nhiên của items
     exact_dups = df.duplicated()
-    exact_dup_count = exact_dups.sum()
-    pair_dups = df.duplicated(subset=['InvoiceNo', 'StockCode'], keep=False)
-    print(f"\n4. Thống kê bản ghi trùng lặp:")
-    print(f"   + Trùng lặp tuyệt đối (100% các cột): {exact_dup_count:,} dòng ({exact_dup_count/total_raw_rows*100:.2f}%)")
-    print(f"   + Dòng có cùng (InvoiceNo, StockCode) nhưng khác số lượng/đơn giá: {pair_dups.sum() - exact_dup_count:,} dòng")
-    print("   -> QUY TẮC: CHỈ loại bỏ các bản ghi trùng lặp 100% (do lỗi duplicate nạp kép).")
-    print("      Các dòng có cùng sản phẩm trong một hóa đơn nhưng có số lượng khác nhau được GIỮ NGUYÊN (mua theo đợt hợp lệ).")
+    key_dups   = df.duplicated(subset=["order_id", "order_item_id"])
+    print(f"\n2. Bản ghi trùng lặp tuyệt đối    : {exact_dups.sum():,} dòng")
+    print(f"   Trùng khoá (order_id,item_id)  : {key_dups.sum():,} dòng")
 
-    # --------------------------------------------------------------------------
-    # 3. QUY TRÌNH PHÂN LOẠI & GẮN NHÃN DÒNG BỊ LOẠI (WATERFALL AUDIT & REJECTION)
-    # --------------------------------------------------------------------------
-    print("\n" + "=" * 85)
-    print("[BƯỚC 3/6] THỰC THI QUY TẮC LÀM SẠCH & PHÂN LOẠI DÒNG BỊ LOẠI (WATERFALL)")
-    print("=" * 85)
+    # 3.4 Phân bố order_status
+    if "order_status" in df.columns:
+        print("\n3. Phân bố trạng thái đơn hàng (order_status):")
+        print(df["order_status"].value_counts().to_string())
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # BƯỚC 4: ÁP DỤNG QUY TẮC LỌC & PHÂN LOẠI DỮ LIỆU BỊ LOẠI (WATERFALL)
+    # ──────────────────────────────────────────────────────────────────────────
+    print("\n[BƯỚC 4/6] ÁP DỤNG QUY TẮC LÀM SẠCH (WATERFALL REJECTION)...")
 
     df_work = df.copy()
-    # Tính GrossAmount ban đầu để kiểm toán doanh thu
-    df_work['Quantity_Clean'] = pd.to_numeric(df_work['Quantity'], errors='coerce').fillna(0)
-    df_work['UnitPrice_Clean'] = pd.to_numeric(df_work['UnitPrice'], errors='coerce').fillna(0.0)
-    df_work['GrossAmount'] = (df_work['Quantity_Clean'] * df_work['UnitPrice_Clean']).round(2)
-    
-    # Định nghĩa các điều kiện theo thứ tự ưu tiên (Priority Waterfall)
-    # 1. Trùng lặp tuyệt đối
-    is_exact_dup = df_work.duplicated(keep='first')
-    
-    # 2. Hóa đơn hủy (InvoiceNo bắt đầu bằng 'C')
-    is_cancelled = (~is_exact_dup) & df_work['InvoiceNo'].str.startswith('C')
-    
-    # 3. Số lượng không dương (hàng trả, hư hỏng, kiểm kê)
-    is_neg_qty = (~is_exact_dup) & (~is_cancelled) & (df_work['Quantity_Clean'] <= 0)
-    
-    # 4. Đơn giá không dương hoặc làm tròn thành 0.00 (quà tặng, hàng thử mẫu, lỗi kỹ thuật kiểm kê, phí giả lập 0.001)
-    is_neg_price = (~is_exact_dup) & (~is_cancelled) & (~is_neg_qty) & (df_work['UnitPrice_Clean'].round(2) <= 0)
+    rejection_reason = pd.Series(index=df_work.index, dtype="object")
 
-    # 5. Lỗi kỹ thuật khác (nếu có: ngày rỗng, mã rỗng)
-    is_invalid_tech = (~is_exact_dup) & (~is_cancelled) & (~is_neg_qty) & (~is_neg_price) & (invalid_stockcode | invalid_date)
+    # Quy tắc 1: Trùng lặp tuyệt đối
+    is_dup = df_work.duplicated(keep="first")
+    rejection_reason[is_dup] = "EXACT_DUPLICATE"
 
-    # Gán nhãn lý do loại rõ ràng
-    rejection_reason = pd.Series(index=df_work.index, dtype='object')
-    rejection_reason[is_exact_dup] = 'EXACT_DUPLICATE'
-    rejection_reason[is_cancelled] = 'CANCELLED_INVOICE'
-    rejection_reason[is_neg_qty] = 'NON_POSITIVE_QUANTITY'
-    rejection_reason[is_neg_price] = 'NON_POSITIVE_UNITPRICE'
-    rejection_reason[is_invalid_tech] = 'INVALID_TECHNICAL_FORMAT'
+    # Quy tắc 2: Đơn hàng không hoàn thành (canceled, unavailable)
+    excluded_status = {"canceled", "unavailable"}
+    is_bad_status = (~is_dup) & (
+        df_work["order_status"].isin(excluded_status) if "order_status" in df_work.columns
+        else pd.Series(False, index=df_work.index)
+    )
+    rejection_reason[is_bad_status] = "ORDER_CANCELED_OR_UNAVAILABLE"
 
-    rejected_mask = is_exact_dup | is_cancelled | is_neg_qty | is_neg_price | is_invalid_tech
-    df_rejected = df_work[rejected_mask].copy()
-    df_rejected['RejectReason'] = rejection_reason[rejected_mask]
+    # Quy tắc 3: Giá <= 0 hoặc null
+    price_invalid = (~is_dup) & (~is_bad_status) & (df_work["price"].isnull() | (df_work["price"] <= 0))
+    rejection_reason[price_invalid] = "INVALID_PRICE_ZERO_OR_NULL"
 
-    # Lưu tập dữ liệu bị loại
-    print(f"-> Đang lưu {len(df_rejected):,} dòng bị loại vào '{output_rejected}'...")
-    cols_rejected = ['InvoiceNo', 'StockCode', 'Description', 'Quantity', 'InvoiceDate', 'UnitPrice', 'CustomerID', 'Country', 'GrossAmount', 'RejectReason']
-    df_rejected[cols_rejected].to_csv(output_rejected, index=False)
-    print("-> Đã lưu thành công dữ liệu bị loại có gắn nhãn lý do chi tiết [OK]")
+    # Quy tắc 4: Thiếu order_id hoặc product_id (khoá chính null)
+    is_missing_key = (~is_dup) & (~is_bad_status) & (~price_invalid) & (
+        df_work["order_id"].isnull() | df_work["product_id"].isnull()
+    )
+    rejection_reason[is_missing_key] = "MISSING_PRIMARY_KEY"
 
-    # Lập bảng đối soát Waterfall Audit
-    audit_steps = [
-        ("1. Tổng dữ liệu thô ban đầu (Raw Data)", total_raw_rows, df_work['InvoiceNo'].nunique(), df_work['GrossAmount'].sum()),
-        ("2. Loại bản ghi trùng lặp tuyệt đối (Exact Duplicates)", is_exact_dup.sum(), df_work.loc[is_exact_dup, 'InvoiceNo'].nunique(), df_work.loc[is_exact_dup, 'GrossAmount'].sum()),
-        ("3. Loại hóa đơn hủy bỏ (Cancelled Invoices)", is_cancelled.sum(), df_work.loc[is_cancelled, 'InvoiceNo'].nunique(), df_work.loc[is_cancelled, 'GrossAmount'].sum()),
-        ("4. Loại số lượng <= 0 (Non-positive Quantity)", is_neg_qty.sum(), df_work.loc[is_neg_qty, 'InvoiceNo'].nunique(), df_work.loc[is_neg_qty, 'GrossAmount'].sum()),
-        ("5. Loại đơn giá <= 0 (Non-positive UnitPrice)", is_neg_price.sum(), df_work.loc[is_neg_price, 'InvoiceNo'].nunique(), df_work.loc[is_neg_price, 'GrossAmount'].sum()),
-        ("6. TẬP DỮ LIỆU SẠCH CUỐI CÙNG (CLEAN DATA)", (~rejected_mask).sum(), df_work.loc[~rejected_mask, 'InvoiceNo'].nunique(), df_work.loc[~rejected_mask, 'GrossAmount'].sum())
+    # Quy tắc 5: Thiếu thông tin khách hàng
+    is_missing_cust = (~is_dup) & (~is_bad_status) & (~price_invalid) & (~is_missing_key) & (
+        df_work["customer_id"].isnull() | df_work["customer_unique_id"].isnull()
+    )
+    rejection_reason[is_missing_cust] = "MISSING_CUSTOMER_INFO"
+
+    # Quy tắc 6: order_purchase_timestamp null
+    is_missing_date = (
+        (~is_dup) & (~is_bad_status) & (~price_invalid) & (~is_missing_key) & (~is_missing_cust) &
+        df_work["order_purchase_timestamp"].isnull()
+    )
+    rejection_reason[is_missing_date] = "MISSING_PURCHASE_DATE"
+
+    rejected_mask = is_dup | is_bad_status | price_invalid | is_missing_key | is_missing_cust | is_missing_date
+    df_rejected   = df_work[rejected_mask].copy()
+    df_rejected["RejectReason"] = rejection_reason[rejected_mask]
+
+    # Bảng đối soát Waterfall
+    rules = [
+        ("1. Tổng bảng hợp nhất ban đầu",             total_raw_rows,        df_work["order_id"].nunique(),         df_work["price"].fillna(0).sum()),
+        ("2. Loại trùng lặp tuyệt đối",                is_dup.sum(),          df_work.loc[is_dup,"order_id"].nunique(),         df_work.loc[is_dup,"price"].fillna(0).sum()),
+        ("3. Loại đơn hủy / unavailable",              is_bad_status.sum(),   df_work.loc[is_bad_status,"order_id"].nunique(),  df_work.loc[is_bad_status,"price"].fillna(0).sum()),
+        ("4. Loại giá <= 0 hoặc null",                 price_invalid.sum(),   df_work.loc[price_invalid,"order_id"].nunique(),  df_work.loc[price_invalid,"price"].fillna(0).sum()),
+        ("5. Loại thiếu khoá order/product",           is_missing_key.sum(),  0,                                                0),
+        ("6. Loại thiếu thông tin khách hàng",         is_missing_cust.sum(), 0,                                                0),
+        ("7. Loại thiếu ngày mua",                     is_missing_date.sum(), 0,                                                0),
+        ("8. TẬP DỮ LIỆU SẠCH CUỐI CÙNG (CLEAN DATA)",
+            (~rejected_mask).sum(),
+            df_work.loc[~rejected_mask, "order_id"].nunique(),
+            df_work.loc[~rejected_mask, "price"].fillna(0).sum()),
     ]
-    
-    df_audit = pd.DataFrame(audit_steps, columns=["Bước kiểm tra / Quy tắc", "Số dòng", "Số hóa đơn", "Tổng doanh thu (GBP)"])
-    df_audit["Tỷ lệ dòng (%)"] = (df_audit["Số dòng"] / total_raw_rows * 100).round(2)
-    print("\nBảng đối soát Waterfall qua từng quy tắc làm sạch:")
+    df_audit = pd.DataFrame(rules, columns=["Bước / Quy tắc", "Số dòng", "Số đơn hàng", "Tổng price (BRL)"])
+    df_audit["Tỷ lệ (%)"] = (df_audit["Số dòng"] / total_raw_rows * 100).round(2)
+    print("\nBảng đối soát Waterfall:")
     print(df_audit.to_string(index=False))
 
     df_audit.to_csv(output_audit, index=False)
-    print(f"-> Đã lưu báo cáo đối soát làm sạch vào '{output_audit}' [OK]")
+    df_rejected.to_csv(output_rejected, index=False)
+    print(f"\n→ Đã lưu {len(df_rejected):,} dòng bị loại → '{output_rejected}' [OK]")
 
-    # --------------------------------------------------------------------------
-    # 4. CHUẨN HÓA DỮ LIỆU SẠCH (TRANSFORMATION & ENRICHMENT)
-    # --------------------------------------------------------------------------
-    print("\n" + "=" * 85)
-    print("[BƯỚC 4/6] CHUẨN HÓA DỮ LIỆU SẠCH & THỐNG NHẤT CÔNG THỨC DOANH THU")
-    print("=" * 85)
+    # ──────────────────────────────────────────────────────────────────────────
+    # BƯỚC 5: CHUẨN HÓA DỮ LIỆU SẠCH (TRANSFORMATION & ENRICHMENT)
+    # ──────────────────────────────────────────────────────────────────────────
+    print("\n[BƯỚC 5/6] CHUẨN HÓA DỮ LIỆU SẠCH...")
 
     df_clean = df_work[~rejected_mask].copy()
 
-    # 4.1 Description và StockCode sạch
-    df_clean['Description'] = df_clean['Description_Clean']
-    print(f"-> Kiểm tra Description trong tập sạch: 100% hợp lệ, không có chuỗi 'NAN' rác.")
+    # 5.1 Kiểu số
+    df_clean["price"]         = df_clean["price"].round(2)
+    df_clean["freight_value"] = pd.to_numeric(df_clean["freight_value"], errors="coerce").fillna(0).round(2)
+    df_clean["total_payment_value"] = pd.to_numeric(df_clean["total_payment_value"], errors="coerce").fillna(0).round(2)
 
-    # 4.2 Chuẩn hóa InvoiceDate
-    df_clean['InvoiceDate'] = pd.to_datetime(df_clean['InvoiceDate'])
-    print(f"-> Chuẩn hóa InvoiceDate: Từ {df_clean['InvoiceDate'].min()} đến {df_clean['InvoiceDate'].max()} [OK]")
+    # 5.2 Thêm cột LineRevenue = price (mỗi order_item_id = 1 đơn vị)
+    df_clean["LineRevenue"] = df_clean["price"]
 
-    # 4.3 Xử lý CustomerID: Tách bạch khách vãng lai
-    df_clean['IsGuestCustomer'] = df_clean['CustomerID'].isnull().astype(int)
-    df_clean['CustomerID_Clean'] = df_clean['CustomerID'].fillna(-1).astype(int)
-    guest_count = df_clean['IsGuestCustomer'].sum()
-    identified_count = (df_clean['IsGuestCustomer'] == 0).sum()
-    print(f"-> Xử lý khách hàng:")
-    print(f"   + Giao dịch định danh có tài khoản: {identified_count:,} dòng ({identified_count/len(df_clean)*100:.2f}%)")
-    print(f"   + Giao dịch khách vãng lai (Guest Checkout gán mã -1): {guest_count:,} dòng ({guest_count/len(df_clean)*100:.2f}%)")
-    print("   -> QUY TẮC BẮT BUỘC:")
-    print("      1. Tính vào Fact_Sales và báo cáo Doanh thu DWH.")
-    print("      2. LOẠI BỎ KHỎI RFM: Không xem mã -1 là một khách hàng thực lẻ.")
+    # 5.3 Chuẩn hóa category: ưu tiên bản dịch tiếng Anh, fallback về Portuguese
+    if "product_category_name_english" in df_clean.columns:
+        df_clean["category"] = (
+            df_clean["product_category_name_english"]
+            .fillna(df_clean.get("product_category_name", pd.Series("unknown", index=df_clean.index)))
+            .fillna("unknown")
+            .str.strip()
+            .str.lower()
+            .replace("", "unknown")
+        )
+    else:
+        df_clean["category"] = df_clean.get("product_category_name", "unknown").fillna("unknown")
 
-    # 4.4 Định nghĩa cách tính doanh thu nhất quán toàn hệ thống
-    # LineRevenue = Quantity * UnitPrice (áp dụng chuẩn ở DWH, OLAP và Mining)
-    df_clean['Quantity'] = df_clean['Quantity_Clean'].astype(int)
-    df_clean['UnitPrice'] = df_clean['UnitPrice_Clean'].round(2)
-    df_clean['LineRevenue'] = (df_clean['Quantity'] * df_clean['UnitPrice']).round(2)
-    df_clean['TotalAmount'] = df_clean['LineRevenue']  # Alias tương thích
+    # 5.4 Cột trạng thái đơn giao hàng: is_delivered
+    df_clean["is_delivered"] = (df_clean["order_status"] == "delivered").astype(int)
 
-    # 4.5 Trích xuất chiều thời gian
-    df_clean['Year'] = df_clean['InvoiceDate'].dt.year
-    df_clean['Month'] = df_clean['InvoiceDate'].dt.month
-    df_clean['YearMonth'] = df_clean['InvoiceDate'].dt.strftime('%Y-%m')
-    df_clean['Day'] = df_clean['InvoiceDate'].dt.day
-    df_clean['DayOfWeek'] = df_clean['InvoiceDate'].dt.day_name()
-    df_clean['Hour'] = df_clean['InvoiceDate'].dt.hour
+    # 5.5 Trích xuất chiều thời gian từ order_purchase_timestamp
+    ts = df_clean["order_purchase_timestamp"]
+    df_clean["purchase_year"]      = ts.dt.year
+    df_clean["purchase_month"]     = ts.dt.month
+    df_clean["purchase_yearmonth"] = ts.dt.strftime("%Y-%m")
+    df_clean["purchase_day"]       = ts.dt.day
+    df_clean["purchase_dayofweek"] = ts.dt.day_name()
+    df_clean["purchase_hour"]      = ts.dt.hour
 
-    # --------------------------------------------------------------------------
-    # 5. ĐÁNH GIÁ MỨC ĐỘ PHÙ HỢP THEO TỪNG MỤC TIÊU PHÂN TÍCH
-    # --------------------------------------------------------------------------
-    print("\n" + "=" * 85)
-    print("[BƯỚC 5/6] ĐÁNH GIÁ MỨC ĐỘ PHÙ HỢP CHO DWH, RFM VÀ MARKET BASKET ANALYSIS")
-    print("=" * 85)
+    # 5.6 Chuỗi khoá sạch
+    for col in ["order_id", "product_id", "customer_id", "customer_unique_id",
+                "seller_id", "customer_state", "customer_city"]:
+        if col in df_clean.columns:
+            df_clean[col] = df_clean[col].astype(str).str.strip()
 
-    # Mục tiêu 1: Kho dữ liệu DWH
-    print("1. Mục tiêu Kho Dữ Liệu (Fact_Sales & OLAP):")
-    print(f"   + Phạm vi doanh thu kho: Chỉ bao gồm các giao dịch mua hàng thương mại hợp lệ.")
-    print(f"   + Tổng số dòng nạp Fact_Sales: {len(df_clean):,} dòng")
-    print(f"   + Tổng doanh thu chuẩn (LineRevenue Sum): {df_clean['LineRevenue'].sum():,.2f} GBP")
+    # ──────────────────────────────────────────────────────────────────────────
+    # BƯỚC 6: ĐÁNH GIÁ MỨC ĐỘ PHÙ HỢP & LƯU KẾT QUẢ
+    # ──────────────────────────────────────────────────────────────────────────
+    print("\n[BƯỚC 6/6] ĐÁNH GIÁ & LƯU DỮ LIỆU SẠCH...")
 
-    # Mục tiêu 2: Khai phá RFM
-    df_identified = df_clean[df_clean['IsGuestCustomer'] == 0]
-    unique_cust = df_identified['CustomerID_Clean'].nunique()
-    cust_orders = df_identified.groupby('CustomerID_Clean')['InvoiceNo'].nunique()
-    cust_spend = df_identified.groupby('CustomerID_Clean')['LineRevenue'].sum()
+    unique_orders     = df_clean["order_id"].nunique()
+    unique_customers  = df_clean["customer_unique_id"].nunique()
+    unique_products   = df_clean["product_id"].nunique()
+    total_revenue_brl = df_clean["LineRevenue"].sum()
 
-    print("\n2. Mục tiêu Phân khúc Khách hàng RFM & K-Means:")
-    print(f"   + Dữ liệu đầu vào: Chỉ lấy khách hàng định danh (CustomerID != -1).")
-    print(f"   + Số lượng khách hàng định danh duy nhất: {unique_cust:,} khách")
-    print(f"   + Số đơn hàng trung bình mỗi khách: {cust_orders.mean():.2f} đơn (Trung vị: {cust_orders.median():.0f}, Max: {cust_orders.max():,} đơn)")
-    print(f"   + Chi tiêu trung bình mỗi khách: {cust_spend.mean():,.2f} GBP (Trung vị: {cust_spend.median():,.2f} GBP, Max: {cust_spend.max():,.2f} GBP)")
+    print(f"\n📊 Tóm tắt bộ dữ liệu sạch:")
+    print(f"   + Tổng dòng line-item : {len(df_clean):,}")
+    print(f"   + Số đơn hàng duy nhất: {unique_orders:,}")
+    print(f"   + Số khách hàng duy nhất (unique): {unique_customers:,}")
+    print(f"   + Số sản phẩm duy nhất (product_id): {unique_products:,}")
+    print(f"   + Tổng doanh thu (BRL) : R$ {total_revenue_brl:,.2f}")
 
-    # Mục tiêu 3: Khai phá Giỏ hàng (Market Basket Analysis - Apriori)
-    invoice_items = df_clean.groupby('InvoiceNo')['StockCode'].nunique()
-    total_valid_invoices = len(invoice_items)
-    invoices_multi_items = (invoice_items >= 2).sum()
+    # Đánh giá phù hợp cho phân tích RFM
+    cust_orders = df_clean.groupby("customer_unique_id")["order_id"].nunique()
+    cust_spend  = df_clean.groupby("customer_unique_id")["LineRevenue"].sum()
+    print(f"\n   → RFM: {unique_customers:,} KH | Đơn TB/KH: {cust_orders.mean():.2f} | Chi TB/KH: R$ {cust_spend.mean():,.2f}")
 
-    print("\n3. Mục tiêu Phân tích Giỏ hàng (Market Basket Analysis - Apriori):")
-    print(f"   + Dữ liệu đầu vào: Các giao dịch mua hàng hợp lệ (loại đơn hủy và cước phí).")
-    print(f"   + Tổng số hóa đơn bán lẻ: {total_valid_invoices:,} hóa đơn")
-    print(f"   + Số hóa đơn chứa từ 2 mặt hàng trở lên: {invoices_multi_items:,} hóa đơn ({invoices_multi_items/total_valid_invoices*100:.2f}%)")
-    print(f"   + Kích thước giỏ hàng trung bình: {invoice_items.mean():.1f} mặt hàng/đơn (Trung vị: {invoice_items.median():.0f})")
+    # Đánh giá phù hợp cho Market Basket
+    order_items = df_clean.groupby("order_id")["product_id"].nunique()
+    multi_item  = (order_items >= 2).sum()
+    print(f"   → MBA: {unique_orders:,} đơn hàng | {multi_item:,} đơn có ≥2 sản phẩm ({multi_item/unique_orders*100:.1f}%)")
 
-    # --------------------------------------------------------------------------
-    # 6. ĐỐI SOÁT SAU LÀM SẠCH & LƯU TẬP DỮ LIỆU SẠCH
-    # --------------------------------------------------------------------------
-    print("\n" + "=" * 85)
-    print("[BƯỚC 6/6] ĐỐI SOÁT TRƯỚC/SAU LÀM SẠCH & LƯU DỮ LIỆU SẠCH")
-    print("=" * 85)
-
-    print(f"{'Chỉ số đối soát':<35} | {'Trước làm sạch (Raw)':<22} | {'Sau làm sạch (Clean)':<22}")
-    print("-" * 85)
-    print(f"{'Tổng số dòng (Rows)':<35} | {total_raw_rows:>22,} | {len(df_clean):>22,}")
-    print(f"{'Tổng số hóa đơn (Invoices)':<35} | {df['InvoiceNo'].nunique():>22,} | {df_clean['InvoiceNo'].nunique():>22,}")
-    print(f"{'Tổng số mặt hàng (StockCode SKU)':<35} | {df['StockCode'].nunique():>22,} | {df_clean['StockCode'].nunique():>22,}")
-    print(f"{'Số khách hàng định danh (Cust ID)':<35} | {df['CustomerID'].dropna().nunique():>22,} | {unique_cust:>22,}")
-    print(f"{'Tổng doanh thu (Revenue GBP)':<35} | {df_work['GrossAmount'].sum():>22,.2f} | {df_clean['LineRevenue'].sum():>22,.2f}")
-    print("-" * 85)
-
-    # Lưu tệp sạch
-    print(f"\nĐang ghi tệp dữ liệu sạch vào '{output_clean}'...")
     df_clean.to_csv(output_clean, index=False)
-    print(f"✅ ĐÃ LƯU THÀNH CÔNG {len(df_clean):,} DÒNG SẠCH VÀO '{output_clean}'!")
+    print(f"\n✅ ĐÃ LƯU {len(df_clean):,} DÒNG SẠCH → '{output_clean}'")
     print("=" * 85)
 
     return df_clean, df_rejected, df_audit
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     run_eda_and_cleaning()

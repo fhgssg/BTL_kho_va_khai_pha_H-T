@@ -1,6 +1,8 @@
 """
 File: 04_run_olap_queries.py
-Mô tả: Thực thi truy vấn OLAP trên PostgreSQL DWH (SQLite có thể chọn qua DWH_DATABASE_URL).
+Mô tả: Giai đoạn 4 - Thực thi 8 truy vấn phân tích OLAP đa chiều
+       trên PostgreSQL DWH Olist Brazilian E-Commerce.
+       Bao gồm minh hoạ đầy đủ 5 thao tác OLAP: SLICE, DICE, DRILL-DOWN, ROLL-UP, PIVOT.
 """
 
 import os
@@ -12,37 +14,41 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 from dwh_connection import get_engine
 
+
 def run_olap_analysis(database_url=None):
     engine = get_engine(database_url)
-    pd.set_option('display.max_columns', 15)
-    pd.set_option('display.width', 1000)
-    
+    pd.set_option("display.max_columns", 15)
+    pd.set_option("display.width", 1200)
+
     print("=" * 80)
-    print("BÁO CÁO PHÂN TÍCH ĐA CHIỀU OLAP & ADVANCED SQL - ONLINE RETAIL DWH")
+    print("BÁO CÁO PHÂN TÍCH ĐA CHIỀU OLAP — OLIST BRAZILIAN E-COMMERCE DWH")
     print("=" * 80)
 
-    # -------------------------------------------------------------------------
-    # BÀI TOÁN 1: DOANH THU THEO THỜI GIAN & TĂNG TRƯỞNG MoM
-    # -------------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────────
+    # BÀI TOÁN 1: DOANH THU THEO THÁNG & TỐC ĐỘ TĂNG TRƯỞNG (MoM GROWTH)
+    # ─────────────────────────────────────────────────────────────────────────
     print("\n[BÀI TOÁN 1] DOANH THU THEO THÁNG & TỐC ĐỘ TĂNG TRƯỞNG (MoM GROWTH %)")
     print("-" * 80)
     q1 = """
     WITH MonthlySales AS (
-        SELECT 
+        SELECT
             d.Year, d.Month, d.YearMonth,
-            COUNT(DISTINCT f.InvoiceNo) AS TotalOrders,
-            SUM(f.Quantity) AS TotalUnitsSold,
-            ROUND(SUM(f.TotalRevenue), 2) AS MonthlyRevenue
-        FROM Fact_Sales f
-        JOIN Dim_Date d ON f.DateKey = d.DateKey
+            COUNT(DISTINCT f.OrderID)              AS TotalOrders,
+            COUNT(*)                               AS TotalItems,
+            ROUND(SUM(f.TotalRevenue)::numeric, 2) AS MonthlyRevenue
+        FROM fact_sales f
+        JOIN dim_date d ON f.DateKey = d.DateKey
         GROUP BY d.Year, d.Month, d.YearMonth
     )
-    SELECT 
-        YearMonth, TotalOrders, TotalUnitsSold, MonthlyRevenue,
+    SELECT
+        YearMonth, TotalOrders, TotalItems, MonthlyRevenue,
         LAG(MonthlyRevenue, 1) OVER (ORDER BY Year, Month) AS PrevMonthRevenue,
-        ROUND((MonthlyRevenue - LAG(MonthlyRevenue, 1) OVER (ORDER BY Year, Month)) * 100.0 
-              / LAG(MonthlyRevenue, 1) OVER (ORDER BY Year, Month), 2) AS MoM_Growth_Pct,
-        ROUND(SUM(MonthlyRevenue) OVER (PARTITION BY Year ORDER BY Month), 2) AS YTD_Running_Total
+        ROUND(
+            (MonthlyRevenue - LAG(MonthlyRevenue, 1) OVER (ORDER BY Year, Month)) * 100.0
+            / NULLIF(LAG(MonthlyRevenue, 1) OVER (ORDER BY Year, Month), 0),
+        2) AS MoM_Growth_Pct,
+        ROUND(SUM(MonthlyRevenue) OVER (PARTITION BY Year ORDER BY Month)::numeric, 2)
+            AS YTD_Running_Total
     FROM MonthlySales
     ORDER BY Year, Month;
     """
@@ -50,68 +56,73 @@ def run_olap_analysis(database_url=None):
         df_q1 = pd.read_sql_query(text(q1), conn)
     print(df_q1.to_string(index=False))
 
-    # -------------------------------------------------------------------------
-    # BÀI TOÁN 2: PHÂN TÍCH THỊ TRƯỜNG ĐỊA LÝ & TỶ TRỌNG
-    # -------------------------------------------------------------------------
-    print("\n\n[BÀI TOÁN 2] TOP 10 THỊ TRƯỜNG ĐỊA LÝ & TỶ TRỌNG DOANH THU TOÀN CẦU")
+    # ─────────────────────────────────────────────────────────────────────────
+    # BÀI TOÁN 2: TOP 10 BANG BRAZIL THEO DOANH THU (TỶ TRỌNG ĐỊA LÝ)
+    # ─────────────────────────────────────────────────────────────────────────
+    print("\n\n[BÀI TOÁN 2] TOP 10 BANG BRAZIL THEO DOANH THU & TỶ TRỌNG")
     print("-" * 80)
     q2 = """
-    WITH CountrySales AS (
-        SELECT 
-            l.Country, l.RegionType,
-            COUNT(DISTINCT f.InvoiceNo) AS TotalInvoices,
-            COUNT(DISTINCT f.CustomerKey) AS TotalCustomers,
-            SUM(f.Quantity) AS TotalUnits,
-            ROUND(SUM(f.TotalRevenue), 2) AS CountryRevenue
-        FROM Fact_Sales f
-        JOIN Dim_Location l ON f.LocationKey = l.LocationKey
-        GROUP BY l.Country, l.RegionType
-    )
-    SELECT 
-        Country, RegionType, TotalInvoices, TotalCustomers, TotalUnits, CountryRevenue,
-        ROUND(CountryRevenue * 100.0 / SUM(CountryRevenue) OVER (), 2) AS Revenue_Share_Pct,
-        RANK() OVER (ORDER BY CountryRevenue DESC) AS CountryRank
-    FROM CountrySales
-    ORDER BY CountryRevenue DESC
+    WITH StateSales AS (
+        SELECT
+            l.CustomerState, l.Region,
+            COUNT(DISTINCT f.OrderID)              AS TotalOrders,
+            COUNT(DISTINCT f.CustomerKey)          AS UniqueCustomers,
+            ROUND(SUM(f.TotalRevenue)::numeric, 2) AS TotalRevenue,
+            ROUND(SUM(f.FreightValue)::numeric, 2) AS TotalFreight
+        FROM fact_sales f
+        JOIN dim_location l ON f.LocationKey = l.LocationKey
+        GROUP BY l.CustomerState, l.Region
+    ),
+    GrandTotal AS (SELECT SUM(TotalRevenue) AS Grand FROM StateSales)
+    SELECT
+        s.CustomerState, s.Region, s.TotalOrders, s.UniqueCustomers,
+        s.TotalRevenue, s.TotalFreight,
+        ROUND(s.TotalRevenue * 100.0 / g.Grand, 2) AS RevShare_Pct,
+        RANK() OVER (ORDER BY s.TotalRevenue DESC) AS Rev_Rank
+    FROM StateSales s, GrandTotal g
+    ORDER BY s.TotalRevenue DESC
     LIMIT 10;
     """
     with engine.connect() as conn:
         df_q2 = pd.read_sql_query(text(q2), conn)
     print(df_q2.to_string(index=False))
 
-    # -------------------------------------------------------------------------
-    # BÀI TOÁN 3: TOP 10 SẢN PHẨM CHỦ LỰC (BÁN CHẠY NHẤT & DOANH THU CAO NHẤT)
-    # -------------------------------------------------------------------------
-    print("\n\n[BÀI TOÁN 3A] TOP 10 SẢN PHẨM BÁN CHẠY NHẤT VỀ SỐ LƯỢNG (QUANTITY)")
+    # ─────────────────────────────────────────────────────────────────────────
+    # BÀI TOÁN 3: TOP 10 DANH MỤC SẢN PHẨM
+    # ─────────────────────────────────────────────────────────────────────────
+    print("\n\n[BÀI TOÁN 3A] TOP 10 DANH MỤC SẢN PHẨM BÁN CHẠY NHẤT (SỐ ĐƠN)")
     print("-" * 80)
     q3a = """
-    SELECT 
-        p.StockCode, SUBSTR(p.Description, 1, 35) AS Description,
-        SUM(f.Quantity) AS TotalQtySold,
-        ROUND(SUM(f.TotalRevenue), 2) AS TotalRevenue,
-        DENSE_RANK() OVER (ORDER BY SUM(f.Quantity) DESC) AS QtyRank
-    FROM Fact_Sales f
-    JOIN Dim_Product p ON f.ProductKey = p.ProductKey
-    GROUP BY p.StockCode, p.Description
-    ORDER BY TotalQtySold DESC
+    SELECT
+        COALESCE(p.CategoryNameEN, p.CategoryNamePT, 'unknown') AS Category,
+        COUNT(DISTINCT f.OrderID)                  AS TotalOrders,
+        COUNT(*)                                   AS TotalItems,
+        ROUND(SUM(f.TotalRevenue)::numeric, 2)     AS TotalRevenue,
+        ROUND(AVG(f.Price)::numeric, 2)            AS AvgPrice,
+        DENSE_RANK() OVER (ORDER BY COUNT(*) DESC) AS Items_Rank
+    FROM fact_sales f
+    JOIN dim_product p ON f.ProductKey = p.ProductKey
+    GROUP BY COALESCE(p.CategoryNameEN, p.CategoryNamePT, 'unknown')
+    ORDER BY TotalItems DESC
     LIMIT 10;
     """
     with engine.connect() as conn:
         df_q3a = pd.read_sql_query(text(q3a), conn)
     print(df_q3a.to_string(index=False))
 
-    print("\n[BÀI TOÁN 3B] TOP 10 SẢN PHẨM DOANH THU CAO NHẤT (REVENUE)")
+    print("\n[BÀI TOÁN 3B] TOP 10 DANH MỤC SẢN PHẨM DOANH THU CAO NHẤT")
     print("-" * 80)
     q3b = """
-    SELECT 
-        p.StockCode, SUBSTR(p.Description, 1, 35) AS Description,
-        SUM(f.Quantity) AS TotalQtySold,
-        ROUND(SUM(f.TotalRevenue), 2) AS TotalRevenue,
-        ROUND(AVG(f.UnitPrice), 2) AS AvgPrice,
-        DENSE_RANK() OVER (ORDER BY SUM(f.TotalRevenue) DESC) AS RevRank
-    FROM Fact_Sales f
-    JOIN Dim_Product p ON f.ProductKey = p.ProductKey
-    GROUP BY p.StockCode, p.Description
+    SELECT
+        COALESCE(p.CategoryNameEN, p.CategoryNamePT, 'unknown') AS Category,
+        COUNT(DISTINCT f.OrderID)                    AS TotalOrders,
+        COUNT(*)                                     AS TotalItems,
+        ROUND(SUM(f.TotalRevenue)::numeric, 2)       AS TotalRevenue,
+        ROUND(AVG(f.Price)::numeric, 2)              AS AvgPrice,
+        DENSE_RANK() OVER (ORDER BY SUM(f.TotalRevenue) DESC) AS Rev_Rank
+    FROM fact_sales f
+    JOIN dim_product p ON f.ProductKey = p.ProductKey
+    GROUP BY COALESCE(p.CategoryNameEN, p.CategoryNamePT, 'unknown')
     ORDER BY TotalRevenue DESC
     LIMIT 10;
     """
@@ -119,186 +130,202 @@ def run_olap_analysis(database_url=None):
         df_q3b = pd.read_sql_query(text(q3b), conn)
     print(df_q3b.to_string(index=False))
 
-    print("\n[BÀI TOÁN 3C] DOANH THU THEO DANH MỤC HỢP NHẤT HAI NGUỒN")
-    print("-" * 80)
-    q3c = """
-    SELECT
-        COALESCE(p.Category, 'Chưa phân loại') AS Category,
-        p.CategorySource,
-        COUNT(DISTINCT p.ProductKey) AS SoldProducts,
-        COUNT(DISTINCT f.InvoiceNo) AS TotalOrders,
-        SUM(f.Quantity) AS TotalQtySold,
-        ROUND(SUM(f.TotalRevenue), 2) AS TotalRevenue,
-        ROUND(SUM(f.TotalRevenue) * 100.0 / SUM(SUM(f.TotalRevenue)) OVER (), 2) AS RevenueSharePct
-    FROM Fact_Sales f
-    JOIN Dim_Product p ON f.ProductKey = p.ProductKey
-    GROUP BY p.Category, p.CategorySource
-    ORDER BY TotalRevenue DESC;
-    """
-    with engine.connect() as conn:
-        df_q3c = pd.read_sql_query(text(q3c), conn)
-    print(df_q3c.to_string(index=False))
-
-    # -------------------------------------------------------------------------
-    # BÀI TOÁN 4: KHUNG GIỜ VÀNG MUA SẮM
-    # -------------------------------------------------------------------------
-    print("\n\n[BÀI TOÁN 4] PHÂN BỐ GIAO DỊCH THEO KHUNG GIỜ (PEAK SHOPPING HOURS)")
+    # ─────────────────────────────────────────────────────────────────────────
+    # BÀI TOÁN 4: ROLLUP ĐA CẤP NĂM → QUÝ → THÁNG
+    # ─────────────────────────────────────────────────────────────────────────
+    print("\n\n[BÀI TOÁN 4] ROLLUP ĐA CẤP: NĂM → QUÝ → THÁNG (mô phỏng CUBE OLAP)")
     print("-" * 80)
     q4 = """
-    SELECT 
-        f.Hour AS ShoppingHour,
-        COUNT(DISTINCT f.InvoiceNo) AS TotalOrders,
-        SUM(f.Quantity) AS TotalUnitsSold,
-        ROUND(SUM(f.TotalRevenue), 2) AS TotalRevenue,
-        ROUND(SUM(f.TotalRevenue) / COUNT(DISTINCT f.InvoiceNo), 2) AS AvgOrderValue,
-        ROUND(SUM(f.TotalRevenue) * 100.0 / SUM(SUM(f.TotalRevenue)) OVER (), 2) AS HourlySharePct
-    FROM Fact_Sales f
-    GROUP BY f.Hour
-    ORDER BY TotalOrders DESC;
+    WITH Base AS (
+        SELECT d.Year, d.QuarterName, d.YearMonth,
+               ROUND(SUM(f.TotalRevenue)::numeric, 2) AS Revenue,
+               COUNT(DISTINCT f.OrderID) AS Orders
+        FROM fact_sales f JOIN dim_date d ON f.DateKey = d.DateKey
+        GROUP BY d.Year, d.QuarterName, d.YearMonth
+    )
+    SELECT 'Tháng' AS Level, Year::text, QuarterName, YearMonth, Revenue, Orders FROM Base
+    UNION ALL
+    SELECT 'Quý',  Year::text, QuarterName, NULL,
+        ROUND(SUM(Revenue)::numeric, 2), SUM(Orders)
+    FROM Base GROUP BY Year, QuarterName
+    UNION ALL
+    SELECT 'Năm',  Year::text, NULL, NULL,
+        ROUND(SUM(Revenue)::numeric, 2), SUM(Orders)
+    FROM Base GROUP BY Year
+    ORDER BY Year, QuarterName NULLS LAST, YearMonth NULLS LAST;
     """
     with engine.connect() as conn:
         df_q4 = pd.read_sql_query(text(q4), conn)
     print(df_q4.to_string(index=False))
 
-    # -------------------------------------------------------------------------
-    # BÀI TOÁN 5: CHỈ SỐ KINH DOANH ĐƠN HÀNG (AOV & AVERAGE BASKET SIZE)
-    # -------------------------------------------------------------------------
-    print("\n\n[BÀI TOÁN 5] GIÁ TRỊ ĐƠN HÀNG TRUNG BÌNH (AOV) & BASKET SIZE THEO THÁNG")
+    # ─────────────────────────────────────────────────────────────────────────
+    # BÀI TOÁN 5: KHUNG GIỜ MUA SẮM (PEAK HOURS)
+    # ─────────────────────────────────────────────────────────────────────────
+    print("\n\n[BÀI TOÁN 5] PHÂN BỐ GIỜ MUA SẮM (PEAK HOURS — 0 đến 23)")
     print("-" * 80)
     q5 = """
-    WITH OrderMetrics AS (
-        SELECT 
-            f.InvoiceNo, d.YearMonth,
-            SUM(f.Quantity) AS OrderUnits,
-            SUM(f.TotalRevenue) AS OrderValue
-        FROM Fact_Sales f
-        JOIN Dim_Date d ON f.DateKey = d.DateKey
-        GROUP BY f.InvoiceNo, d.YearMonth
-    )
-    SELECT 
-        YearMonth,
-        COUNT(InvoiceNo) AS TotalOrders,
-        ROUND(SUM(OrderValue), 2) AS TotalRevenue,
-        ROUND(AVG(OrderValue), 2) AS AOV_GBP,
-        ROUND(AVG(OrderUnits), 1) AS AvgBasketSize
-    FROM OrderMetrics
-    GROUP BY YearMonth
-    ORDER BY YearMonth;
+    SELECT
+        f.PurchaseHour AS Hour,
+        COUNT(DISTINCT f.OrderID)              AS TotalOrders,
+        COUNT(*)                               AS TotalItems,
+        ROUND(SUM(f.TotalRevenue)::numeric, 2) AS Revenue,
+        ROUND(SUM(f.TotalRevenue) * 100.0 / SUM(SUM(f.TotalRevenue)) OVER (), 2) AS HourSharePct,
+        RANK() OVER (ORDER BY COUNT(DISTINCT f.OrderID) DESC) AS Hour_Rank
+    FROM fact_sales f
+    GROUP BY f.PurchaseHour
+    ORDER BY f.PurchaseHour;
     """
     with engine.connect() as conn:
         df_q5 = pd.read_sql_query(text(q5), conn)
     print(df_q5.to_string(index=False))
 
-    # -------------------------------------------------------------------------
-    # BÀI TOÁN 6: TỶ LỆ KHÁCH HÀNG QUAY LẠI (REPEAT CUSTOMER RATE)
-    # -------------------------------------------------------------------------
-    print("\n\n[BÀI TOÁN 6] TỶ LỆ KHÁCH HÀNG QUAY LẠI (REPEAT CUSTOMER RATE)")
+    # ─────────────────────────────────────────────────────────────────────────
+    # BÀI TOÁN 6: PHƯƠNG THỨC THANH TOÁN & TRẢ GÓP
+    # ─────────────────────────────────────────────────────────────────────────
+    print("\n\n[BÀI TOÁN 6] PHÂN TÍCH PHƯƠNG THỨC THANH TOÁN & SỐ ĐỢT TRẢ GÓP")
     print("-" * 80)
     q6 = """
-    WITH CustomerOrders AS (
-        SELECT 
-            c.CustomerKey, c.CustomerID,
-            COUNT(DISTINCT f.InvoiceNo) AS OrderFrequency,
-            ROUND(SUM(f.TotalRevenue), 2) AS CustomerSpending
-        FROM Fact_Sales f
-        JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
-        WHERE c.IsGuestCustomer = 0
-        GROUP BY c.CustomerKey, c.CustomerID
-    )
-    SELECT 
-        COUNT(CustomerKey) AS TotalIdentifiedCustomers,
-        SUM(CASE WHEN OrderFrequency = 1 THEN 1 ELSE 0 END) AS OneTimeBuyers,
-        SUM(CASE WHEN OrderFrequency > 1 THEN 1 ELSE 0 END) AS RepeatCustomers,
-        ROUND(SUM(CASE WHEN OrderFrequency > 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(CustomerKey), 2) AS RepeatCustomerRate_Pct,
-        ROUND(AVG(CustomerSpending), 2) AS AvgSpendPerCustomer
-    FROM CustomerOrders;
+    SELECT
+        pm.PaymentType,
+        pm.PaymentTypeVN,
+        COUNT(DISTINCT f.OrderID)                         AS TotalOrders,
+        ROUND(AVG(f.PaymentInstallments)::numeric, 2)     AS AvgInstallments,
+        ROUND(SUM(f.TotalPaymentValue)::numeric, 2)       AS TotalPaymentValue,
+        ROUND(AVG(f.TotalPaymentValue)::numeric, 2)       AS AvgOrderValue,
+        RANK() OVER (ORDER BY COUNT(DISTINCT f.OrderID) DESC) AS Usage_Rank
+    FROM fact_sales f
+    JOIN dim_payment pm ON f.PaymentKey = pm.PaymentKey
+    GROUP BY pm.PaymentType, pm.PaymentTypeVN
+    ORDER BY TotalOrders DESC;
     """
     with engine.connect() as conn:
         df_q6 = pd.read_sql_query(text(q6), conn)
     print(df_q6.to_string(index=False))
 
-    # -------------------------------------------------------------------------
-    # BÀI TOÁN 7: TOP 10 KHÁCH HÀNG VIP
-    # -------------------------------------------------------------------------
-    print("\n\n[BÀI TOÁN 7] TOP 10 KHÁCH HÀNG VIP ĐÓNG GÓP DOANH THU CAO NHẤT")
+    # ─────────────────────────────────────────────────────────────────────────
+    # BÀI TOÁN 7: TỶ LỆ GIAO HÀNG THÀNH CÔNG THEO VÙNG KINH TẾ
+    # ─────────────────────────────────────────────────────────────────────────
+    print("\n\n[BÀI TOÁN 7] TỶ LỆ GIAO HÀNG THÀNH CÔNG THEO VÙNG KINH TẾ BRAZIL")
     print("-" * 80)
     q7 = """
-    SELECT 
-        c.CustomerID, c.CustomerCode, c.Country,
-        COUNT(DISTINCT f.InvoiceNo) AS TotalOrders,
-        SUM(f.Quantity) AS TotalUnitsBought,
-        ROUND(SUM(f.TotalRevenue), 2) AS TotalSpent,
-        ROUND(SUM(f.TotalRevenue) / COUNT(DISTINCT f.InvoiceNo), 2) AS AvgOrderValue,
-        DENSE_RANK() OVER (ORDER BY SUM(f.TotalRevenue) DESC) AS SpendingRank
-    FROM Fact_Sales f
-    JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
-    WHERE c.IsGuestCustomer = 0
-    GROUP BY c.CustomerID, c.CustomerCode, c.Country
-    ORDER BY TotalSpent DESC
-    LIMIT 10;
+    SELECT
+        l.Region,
+        l.CustomerState,
+        COUNT(DISTINCT f.OrderID) AS TotalOrders,
+        SUM(f.IsDelivered) AS DeliveredOrders,
+        ROUND(SUM(f.IsDelivered) * 100.0 / COUNT(DISTINCT f.OrderID), 2) AS DeliveryRate_Pct,
+        ROUND(AVG(f.FreightValue)::numeric, 2) AS AvgFreight
+    FROM fact_sales f
+    JOIN dim_location l ON f.LocationKey = l.LocationKey
+    GROUP BY l.Region, l.CustomerState
+    ORDER BY l.Region, DeliveryRate_Pct DESC;
     """
     with engine.connect() as conn:
         df_q7 = pd.read_sql_query(text(q7), conn)
     print(df_q7.to_string(index=False))
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # BÀI TOÁN 8: AOV (AVERAGE ORDER VALUE) THEO THÁNG & VÙNG — Window Functions
+    # ─────────────────────────────────────────────────────────────────────────
+    print("\n\n[BÀI TOÁN 8] AOV THEO THÁNG & VÙNG — DENSE_RANK + LAG (WINDOW FUNCTIONS)")
+    print("-" * 80)
+    q8 = """
+    WITH OrderRevenue AS (
+        SELECT
+            f.OrderID, d.YearMonth, d.Year, d.Month, l.Region,
+            SUM(f.TotalRevenue) AS OrderValue
+        FROM fact_sales f
+        JOIN dim_date d     ON f.DateKey     = d.DateKey
+        JOIN dim_location l ON f.LocationKey = l.LocationKey
+        GROUP BY f.OrderID, d.YearMonth, d.Year, d.Month, l.Region
+    ),
+    AOV_Monthly AS (
+        SELECT YearMonth, Year, Month, Region,
+               COUNT(OrderID)                     AS TotalOrders,
+               ROUND(AVG(OrderValue)::numeric, 2) AS AOV
+        FROM OrderRevenue
+        GROUP BY YearMonth, Year, Month, Region
+    )
+    SELECT
+        YearMonth, Region, TotalOrders, AOV,
+        LAG(AOV, 1) OVER (PARTITION BY Region ORDER BY Year, Month) AS PrevAOV,
+        ROUND(
+            (AOV - LAG(AOV, 1) OVER (PARTITION BY Region ORDER BY Year, Month)) * 100.0
+            / NULLIF(LAG(AOV, 1) OVER (PARTITION BY Region ORDER BY Year, Month), 0),
+        2) AS AOV_Growth_Pct,
+        DENSE_RANK() OVER (PARTITION BY YearMonth ORDER BY AOV DESC) AS AOV_Region_Rank
+    FROM AOV_Monthly
+    ORDER BY YearMonth, Region;
+    """
+    with engine.connect() as conn:
+        df_q8 = pd.read_sql_query(text(q8), conn)
+    print(df_q8.to_string(index=False))
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # MINH HOẠ 5 THAO TÁC OLAP
+    # ─────────────────────────────────────────────────────────────────────────
     olap_demos = [
         (
             "SLICE",
-            "Chọn một lát dữ liệu: doanh thu theo tháng của năm 2011.",
-            """SELECT yearmonth, revenue_gbp
-               FROM mv_olap_monthly_sales
-               WHERE year = 2011
-               ORDER BY yearmonth
-               LIMIT 5""",
+            "Chọn một lát dữ liệu: Doanh thu tháng của Đông Nam Brazil (Southeast).",
+            """SELECT yearmonth, customerstate, monthlyrevenue
+               FROM mv_olap_monthly_country_sales
+               WHERE region = 'Southeast'
+               ORDER BY yearmonth, customerstate
+               LIMIT 10""",
         ),
         (
             "DICE",
-            "Chọn đồng thời nhiều chiều: UK/Đức trong quý 4 năm 2011.",
-            """SELECT yearmonth, country, revenue_gbp
+            "Chọn đồng thời nhiều chiều: SP & RJ trong quý 4.",
+            """SELECT yearmonth, customerstate, monthlyrevenue
                FROM mv_olap_monthly_country_sales
-               WHERE year = 2011 AND quarter = 4
-                 AND country IN ('United Kingdom', 'Germany')
-               ORDER BY yearmonth, country""",
+               WHERE customerstate IN ('SP', 'RJ')
+               ORDER BY yearmonth, customerstate
+               LIMIT 10""",
         ),
         (
             "DRILL-DOWN",
-            "Đi từ tổng doanh thu năm xuống từng tháng trong năm.",
-            """SELECT yearmonth, revenue_gbp
+            "Từ tổng doanh thu năm → từng tháng.",
+            """SELECT yearmonth, monthlyrevenue
                FROM mv_olap_monthly_sales
-               WHERE year = 2011
-               ORDER BY yearmonth""",
+               ORDER BY yearmonth
+               LIMIT 10""",
         ),
         (
             "ROLL-UP",
             "Gộp dữ liệu tháng lên cấp quý.",
-            """SELECT year, quarter, SUM(revenue_gbp) AS revenue_gbp
+            """SELECT quartername, SUM(monthlyrevenue) AS quarterly_revenue
                FROM mv_olap_monthly_sales
-               GROUP BY year, quarter
-               ORDER BY year, quarter""",
+               GROUP BY quartername
+               ORDER BY quartername""",
         ),
         (
             "PIVOT",
-            "Chuyển quốc gia thành cột để so sánh doanh thu theo tháng.",
+            "Chuyển bang thành cột: so sánh SP vs RJ vs MG theo tháng.",
             """SELECT yearmonth,
-                      SUM(CASE WHEN country = 'United Kingdom' THEN revenue_gbp ELSE 0 END) AS uk_revenue,
-                      SUM(CASE WHEN country = 'Germany' THEN revenue_gbp ELSE 0 END) AS germany_revenue,
-                      SUM(CASE WHEN country = 'EIRE' THEN revenue_gbp ELSE 0 END) AS eire_revenue
+                       SUM(CASE WHEN customerstate = 'SP' THEN monthlyrevenue ELSE 0 END) AS SP,
+                       SUM(CASE WHEN customerstate = 'RJ' THEN monthlyrevenue ELSE 0 END) AS RJ,
+                       SUM(CASE WHEN customerstate = 'MG' THEN monthlyrevenue ELSE 0 END) AS MG
                FROM mv_olap_monthly_country_sales
                GROUP BY yearmonth
                ORDER BY yearmonth
-               LIMIT 5""",
+               LIMIT 10""",
         ),
     ]
-    print("\n\n[OLAP] MINH HỌA ĐỦ 5 THAO TÁC SLICE, DICE, DRILL-DOWN, ROLL-UP, PIVOT")
+    print("\n\n[OLAP] MINH HOẠ ĐỦ 5 THAO TÁC: SLICE, DICE, DRILL-DOWN, ROLL-UP, PIVOT")
     for operation, explanation, query in olap_demos:
         print(f"\n[{operation}] {explanation}")
         with engine.connect() as conn:
-            demo_result = pd.read_sql_query(text(query), conn)
-        print(demo_result.to_string(index=False))
+            try:
+                result = pd.read_sql_query(text(query), conn)
+                print(result.to_string(index=False))
+            except Exception as e:
+                print(f"  ⚠ Lỗi khi thực thi {operation}: {e}")
 
     print("\n" + "=" * 80)
-    print("HOÀN TẤT THỰC THI TRUY VẤN OLAP!")
+    print("✅ HOÀN TẤT THỰC THI TRUY VẤN OLAP — OLIST DWH!")
     print("=" * 80)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     run_olap_analysis()

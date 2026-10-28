@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RequirementsPath = Join-Path $ProjectRoot "requirements.txt"
-$DataPath = Join-Path $ProjectRoot "data\raw\data.csv"
+$DataPath = Join-Path $ProjectRoot "data\raw\olist_orders_dataset.csv"
 $VenvPath = Join-Path $ProjectRoot ".venv"
 $VenvPython = Join-Path $VenvPath "Scripts\python.exe"
 $RequirementsMarker = Join-Path $VenvPath ".requirements-sha256"
@@ -110,7 +110,7 @@ try {
         throw "Không tìm thấy requirements.txt trong thư mục dự án."
     }
     if (-not (Test-Path $DataPath)) {
-        throw "Thiếu dữ liệu nguồn: data\raw\data.csv. Hãy chép file dữ liệu vào vị trí này rồi chạy lại."
+        throw "Thiếu dữ liệu nguồn Olist: data\raw\olist_orders_dataset.csv. Hãy tải đủ 6 file CSV từ Kaggle Brazilian E-Commerce rồi chạy lại."
     }
 
     $dockerCommand = Get-Command docker -ErrorAction SilentlyContinue

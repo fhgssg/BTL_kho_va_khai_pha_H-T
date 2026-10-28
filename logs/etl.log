@@ -60,3 +60,29 @@
 2026-10-27 20:21:19 | INFO  | File kho dữ liệu đã sẵn sàng: 'E:\ổ D\Kho\B\database\retail_dwh.db'
 2026-10-27 20:21:19 | INFO  | Log chi tiết đã ghi tại: 'E:\ổ D\Kho\B\logs\etl.log'
 2026-10-27 20:21:19 | INFO  | ======================================================================
+2026-10-28 15:46:08 | INFO  | ======================================================================
+2026-10-28 15:46:08 | INFO  | ETL PIPELINE LOCAL (SQLite) — OLIST BRAZILIAN E-COMMERCE
+2026-10-28 15:46:08 | INFO  | ======================================================================
+2026-10-28 15:46:08 | INFO  | [1/6] Đọc 'E:\ổ D\Kho\B\data\processed\data_cleaned.csv'...
+2026-10-28 15:46:08 | INFO  |   → 112,101 dòng × 39 cột
+2026-10-28 15:46:08 | INFO  | [2/6] Kết nối SQLite 'E:\ổ D\Kho\B\database\retail_dwh.db'...
+2026-10-28 15:46:08 | INFO  | [3/6] Áp dụng DDL 'E:\ổ D\Kho\B\database\02_schema_ddl.sql'...
+2026-10-28 15:46:09 | INFO  | [4/6] Xây dựng và nạp Dim_Date...
+2026-10-28 15:46:09 | INFO  |   → Dim_Date: 730 rows
+2026-10-28 15:46:09 | INFO  |   → Dim_Location: 4,299 rows
+2026-10-28 15:46:41 | INFO  |   → Dim_Customer: 94,983 rows
+2026-10-28 15:46:41 | INFO  |   → Dim_Product: 32,729 rows
+2026-10-28 15:46:41 | INFO  |   → Dim_Payment: 5 rows
+2026-10-28 15:46:48 | INFO  |   → Fact_Sales: 112,101 rows | R$ 13,494,400.74
+2026-10-28 15:46:48 | INFO  | [5/6] Đối soát số bản ghi SQLite...
+2026-10-28 15:46:48 | INFO  |   Dim_Date            :        730
+2026-10-28 15:46:48 | INFO  |   Dim_Location        :      4,299
+2026-10-28 15:46:48 | INFO  |   Dim_Customer        :     94,983
+2026-10-28 15:46:48 | INFO  |   Dim_Product         :     32,729
+2026-10-28 15:46:48 | INFO  |   Dim_Payment         :          5
+2026-10-28 15:46:48 | INFO  |   Fact_Sales          :    112,101
+2026-10-28 15:46:48 | INFO  |   Doanh thu SQLite  : R$ 13,494,400.74
+2026-10-28 15:46:48 | INFO  |   Doanh thu nguồn   : R$ 13,494,400.74
+2026-10-28 15:46:48 | INFO  |   Đối chiếu: ✅ KHỚP
+2026-10-28 15:46:48 | INFO  | [6/6] ✅ ETL HOÀN THÀNH TRONG 39.85 GIÂY — SQLite: 'E:\ổ D\Kho\B\database\retail_dwh.db'
+2026-10-28 15:46:48 | INFO  | ======================================================================
